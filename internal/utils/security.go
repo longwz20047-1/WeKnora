@@ -162,7 +162,7 @@ var restrictedIPv4Ranges = []*net.IPNet{
 	// 100.64.0.0/10 - Carrier-grade NAT (RFC 6598)
 	mustParseCIDR("100.64.0.0/10"),
 	// 198.18.0.0/15 - Network device benchmark testing (RFC 2544)
-	mustParseCIDR("198.18.0.0/15"),
+	//mustParseCIDR("198.18.0.0/15"),
 	// 198.51.100.0/24 - TEST-NET-2 for documentation (RFC 5737)
 	mustParseCIDR("198.51.100.0/24"),
 	// 203.0.113.0/24 - TEST-NET-3 for documentation (RFC 5737)

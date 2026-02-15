@@ -1169,9 +1169,25 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 	// 重新分配容量，考虑图片相关的Chunk
 	insertChunks := make([]*types.Chunk, 0, len(chunks)+imageChunkCount)
 
+	isImage := IsImageType(strings.ToLower(knowledge.FileType))
+
 	for _, chunkData := range chunks {
 		if strings.TrimSpace(chunkData.Content) == "" {
 			continue
+		}
+
+		// 对纯图片文件：如果有 OCR 文本，用 OCR 文本替换主 chunk 的 content（原 content 只是 ![filename](url)）
+		chunkContent := chunkData.Content
+		if isImage && len(chunkData.Images) > 0 {
+			var ocrParts []string
+			for _, img := range chunkData.Images {
+				if img.OcrText != "" {
+					ocrParts = append(ocrParts, img.OcrText)
+				}
+			}
+			if len(ocrParts) > 0 {
+				chunkContent = strings.Join(ocrParts, "\n\n")
+			}
 		}
 
 		// 创建主文本Chunk
@@ -1180,7 +1196,7 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 			TenantID:        knowledge.TenantID,
 			KnowledgeID:     knowledge.ID,
 			KnowledgeBaseID: knowledge.KnowledgeBaseID,
-			Content:         chunkData.Content,
+			Content:         chunkContent,
 			ChunkIndex:      int(chunkData.Seq),
 			IsEnabled:       true,
 			CreatedAt:       time.Now(),
@@ -1215,48 +1231,51 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 					continue
 				}
 
-				// 如果有OCR文本，创建OCR Chunk
-				if img.OcrText != "" {
-					ocrChunk := &types.Chunk{
-						ID:              uuid.New().String(),
-						TenantID:        knowledge.TenantID,
-						KnowledgeID:     knowledge.ID,
-						KnowledgeBaseID: knowledge.KnowledgeBaseID,
-						Content:         img.OcrText,
-						ChunkIndex:      maxSeq + i*100 + 1, // 使用不冲突的索引方式
-						IsEnabled:       true,
-						CreatedAt:       time.Now(),
-						UpdatedAt:       time.Now(),
-						StartAt:         int(img.Start),
-						EndAt:           int(img.End),
-						ChunkType:       types.ChunkTypeImageOCR,
-						ParentChunkID:   textChunk.ID,
-						ImageInfo:       string(imageInfoJSON),
+				// 非图片文件类型：OCR 和 Caption 仍创建独立 Chunk（如 PDF/DOCX 中嵌入的图片）
+				if !isImage {
+					// 如果有OCR文本，创建OCR Chunk
+					if img.OcrText != "" {
+						ocrChunk := &types.Chunk{
+							ID:              uuid.New().String(),
+							TenantID:        knowledge.TenantID,
+							KnowledgeID:     knowledge.ID,
+							KnowledgeBaseID: knowledge.KnowledgeBaseID,
+							Content:         img.OcrText,
+							ChunkIndex:      maxSeq + i*100 + 1, // 使用不冲突的索引方式
+							IsEnabled:       true,
+							CreatedAt:       time.Now(),
+							UpdatedAt:       time.Now(),
+							StartAt:         int(img.Start),
+							EndAt:           int(img.End),
+							ChunkType:       types.ChunkTypeImageOCR,
+							ParentChunkID:   textChunk.ID,
+							ImageInfo:       string(imageInfoJSON),
+						}
+						insertChunks = append(insertChunks, ocrChunk)
+						logger.GetLogger(ctx).Infof("Created OCR chunk for image %d in chunk #%d", i, chunkData.Seq)
 					}
-					insertChunks = append(insertChunks, ocrChunk)
-					logger.GetLogger(ctx).Infof("Created OCR chunk for image %d in chunk #%d", i, chunkData.Seq)
-				}
 
-				// 如果有图片描述，创建Caption Chunk
-				if img.Caption != "" {
-					captionChunk := &types.Chunk{
-						ID:              uuid.New().String(),
-						TenantID:        knowledge.TenantID,
-						KnowledgeID:     knowledge.ID,
-						KnowledgeBaseID: knowledge.KnowledgeBaseID,
-						Content:         img.Caption,
-						ChunkIndex:      maxSeq + i*100 + 2, // 使用不冲突的索引方式
-						IsEnabled:       true,
-						CreatedAt:       time.Now(),
-						UpdatedAt:       time.Now(),
-						StartAt:         int(img.Start),
-						EndAt:           int(img.End),
-						ChunkType:       types.ChunkTypeImageCaption,
-						ParentChunkID:   textChunk.ID,
-						ImageInfo:       string(imageInfoJSON),
+					// 如果有图片描述，创建Caption Chunk
+					if img.Caption != "" {
+						captionChunk := &types.Chunk{
+							ID:              uuid.New().String(),
+							TenantID:        knowledge.TenantID,
+							KnowledgeID:     knowledge.ID,
+							KnowledgeBaseID: knowledge.KnowledgeBaseID,
+							Content:         img.Caption,
+							ChunkIndex:      maxSeq + i*100 + 2, // 使用不冲突的索引方式
+							IsEnabled:       true,
+							CreatedAt:       time.Now(),
+							UpdatedAt:       time.Now(),
+							StartAt:         int(img.Start),
+							EndAt:           int(img.End),
+							ChunkType:       types.ChunkTypeImageCaption,
+							ParentChunkID:   textChunk.ID,
+							ImageInfo:       string(imageInfoJSON),
+						}
+						insertChunks = append(insertChunks, captionChunk)
+						logger.GetLogger(ctx).Infof("Created caption chunk for image %d in chunk #%d", i, chunkData.Seq)
 					}
-					insertChunks = append(insertChunks, captionChunk)
-					logger.GetLogger(ctx).Infof("Created caption chunk for image %d in chunk #%d", i, chunkData.Seq)
 				}
 			}
 

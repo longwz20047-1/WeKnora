@@ -166,7 +166,7 @@ func (h *ChunkHandler) ListKnowledgeChunks(c *gin.Context) {
 		pagination.PageSize = 100
 	}
 
-	chunkType := []types.ChunkType{types.ChunkTypeText}
+	chunkType := []types.ChunkType{types.ChunkTypeText, types.ChunkTypeImageOCR, types.ChunkTypeImageCaption, types.ChunkTypeSummary}
 
 	// Use pagination for query (effCtx has effectiveTenantID for shared KB)
 	result, err := h.service.ListPagedChunksByKnowledgeID(effCtx, knowledgeID, &pagination, chunkType)

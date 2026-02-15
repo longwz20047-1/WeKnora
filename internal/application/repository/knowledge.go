@@ -87,7 +87,11 @@ func (r *knowledgeRepository) ListPagedKnowledgeByKnowledgeBaseID(
 	query := r.db.WithContext(ctx).Model(&types.Knowledge{}).
 		Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID)
 	if tagID != "" {
-		query = query.Where("tag_id = ?", tagID)
+		if tagID == "__untagged__" {
+			query = query.Where("tag_id IS NULL OR tag_id = ''")
+		} else {
+			query = query.Where("tag_id = ?", tagID)
+		}
 	}
 	if keyword != "" {
 		query = query.Where("file_name LIKE ?", "%"+keyword+"%")
@@ -111,7 +115,11 @@ func (r *knowledgeRepository) ListPagedKnowledgeByKnowledgeBaseID(
 	dataQuery := r.db.WithContext(ctx).
 		Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID)
 	if tagID != "" {
-		dataQuery = dataQuery.Where("tag_id = ?", tagID)
+		if tagID == "__untagged__" {
+			dataQuery = dataQuery.Where("tag_id IS NULL OR tag_id = ''")
+		} else {
+			dataQuery = dataQuery.Where("tag_id = ?", tagID)
+		}
 	}
 	if keyword != "" {
 		dataQuery = dataQuery.Where("file_name LIKE ?", "%"+keyword+"%")
