@@ -19,6 +19,7 @@ import (
 
 	"github.com/Tencent/WeKnora/docreader/client"
 	"github.com/Tencent/WeKnora/docreader/proto"
+	firecrawl "github.com/mendableai/firecrawl-go/v2"
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
 	"github.com/Tencent/WeKnora/internal/config"
 	werrors "github.com/Tencent/WeKnora/internal/errors"
@@ -71,6 +72,7 @@ type knowledgeService struct {
 	graphEngine     interfaces.RetrieveGraphRepository
 	redisClient     *redis.Client
 	kbShareService  interfaces.KBShareService
+	firecrawlApp    *firecrawl.FirecrawlApp // 可选：Firecrawl 抓取客户端（nil 时回退到 DocReader）
 }
 
 const (
@@ -97,6 +99,7 @@ func NewKnowledgeService(
 	retrieveEngine interfaces.RetrieveEngineRegistry,
 	redisClient *redis.Client,
 	kbShareService interfaces.KBShareService,
+	firecrawlApp *firecrawl.FirecrawlApp,
 ) (interfaces.KnowledgeService, error) {
 	return &knowledgeService{
 		config:          config,
@@ -115,6 +118,7 @@ func NewKnowledgeService(
 		retrieveEngine:  retrieveEngine,
 		redisClient:     redisClient,
 		kbShareService:  kbShareService,
+		firecrawlApp:    firecrawlApp,
 	}, nil
 }
 
@@ -1031,6 +1035,44 @@ func (s *knowledgeService) processDocumentFromPassage(ctx context.Context,
 }
 
 // ProcessChunksOptions contains options for processing chunks
+
+// splitMarkdownIntoChunks 将 Markdown 文本按 chunkSize/chunkOverlap 切分为 proto.Chunk 列表
+// 供 Firecrawl 抓取结果转换使用（DocReader 已内置分块，Firecrawl 只返回原始 Markdown）
+func splitMarkdownIntoChunks(markdown string, chunkSize, chunkOverlap int) []*proto.Chunk {
+	if chunkSize <= 0 {
+		chunkSize = 512
+	}
+	if chunkOverlap < 0 || chunkOverlap >= chunkSize {
+		chunkOverlap = 0
+	}
+	runes := []rune(markdown)
+	total := len(runes)
+	if total == 0 {
+		return nil
+	}
+	var chunks []*proto.Chunk
+	start := 0
+	seq := int32(0)
+	for start < total {
+		end := start + chunkSize
+		if end > total {
+			end = total
+		}
+		chunks = append(chunks, &proto.Chunk{
+			Content: string(runes[start:end]),
+			Seq:     seq,
+			Start:   int32(start),
+			End:     int32(end),
+		})
+		seq++
+		next := start + chunkSize - chunkOverlap
+		if next <= start {
+			next = start + 1
+		}
+		start = next
+	}
+	return chunks
+}
 type ProcessChunksOptions struct {
 	EnableQuestionGeneration bool
 	QuestionCount            int
@@ -6656,40 +6698,77 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 			return nil
 		}
 
-		urlResp, err := s.docReaderClient.ReadFromURL(ctx, &proto.ReadFromURLRequest{
-			Url:   payload.URL,
-			Title: knowledge.Title,
-			ReadConfig: &proto.ReadConfig{
-				ChunkSize:        int32(kb.ChunkingConfig.ChunkSize),
-				ChunkOverlap:     int32(kb.ChunkingConfig.ChunkOverlap),
-				Separators:       kb.ChunkingConfig.Separators,
-				EnableMultimodal: payload.EnableMultimodel,
-				StorageConfig: &proto.StorageConfig{
-					Provider: proto.StorageProvider(
-						proto.StorageProvider_value[strings.ToUpper(kb.StorageConfig.Provider)],
-					),
-					Region:          kb.StorageConfig.Region,
-					BucketName:      kb.StorageConfig.BucketName,
-					AccessKeyId:     kb.StorageConfig.SecretID,
-					SecretAccessKey: kb.StorageConfig.SecretKey,
-					AppId:           kb.StorageConfig.AppID,
-					PathPrefix:      kb.StorageConfig.PathPrefix,
-				},
-				VlmConfig: vlmConfig,
-			},
-			RequestId: payload.RequestId,
-		})
-		if err != nil {
-			// 如果是最后一次重试，更新状态为失败
-			if isLastRetry {
-				knowledge.ParseStatus = "failed"
-				knowledge.ErrorMessage = err.Error()
-				knowledge.UpdatedAt = time.Now()
+		if s.firecrawlApp != nil {
+			// Firecrawl 路径：直接抓取并获取 Markdown，不经过 DocReader
+			onlyMain := true
+			timeout := 30000
+			result, fcErr := s.firecrawlApp.ScrapeURL(payload.URL, &firecrawl.ScrapeParams{
+				Formats:         []string{"markdown"},
+				OnlyMainContent: &onlyMain,
+				Timeout:         &timeout,
+			})
+			if fcErr != nil {
+				if isLastRetry {
+					knowledge.ParseStatus = "failed"
+					knowledge.ErrorMessage = fcErr.Error()
+					knowledge.UpdatedAt = time.Now()
+					s.repo.UpdateKnowledge(ctx, knowledge)
+				}
+				return fmt.Errorf("firecrawl scrape failed: %w", fcErr)
+			}
+			if result == nil {
+				if isLastRetry {
+					knowledge.ParseStatus = "failed"
+					knowledge.ErrorMessage = "firecrawl returned empty result"
+					knowledge.UpdatedAt = time.Now()
+					s.repo.UpdateKnowledge(ctx, knowledge)
+				}
+				return fmt.Errorf("firecrawl returned empty result for URL: %s", payload.URL)
+			}
+			// 若 Firecrawl 获取到标题且知识条目无标题，则更新标题
+			if knowledge.Title == "" && result.Metadata != nil && result.Metadata.Title != nil {
+				knowledge.Title = *result.Metadata.Title
 				s.repo.UpdateKnowledge(ctx, knowledge)
 			}
-			return fmt.Errorf("failed to read from URL: %w", err)
+			chunks = splitMarkdownIntoChunks(result.Markdown,
+				kb.ChunkingConfig.ChunkSize, kb.ChunkingConfig.ChunkOverlap)
+		} else {
+			// DocReader 回退路径（Firecrawl 未配置时）
+			urlResp, err := s.docReaderClient.ReadFromURL(ctx, &proto.ReadFromURLRequest{
+				Url:   payload.URL,
+				Title: knowledge.Title,
+				ReadConfig: &proto.ReadConfig{
+					ChunkSize:        int32(kb.ChunkingConfig.ChunkSize),
+					ChunkOverlap:     int32(kb.ChunkingConfig.ChunkOverlap),
+					Separators:       kb.ChunkingConfig.Separators,
+					EnableMultimodal: payload.EnableMultimodel,
+					StorageConfig: &proto.StorageConfig{
+						Provider: proto.StorageProvider(
+							proto.StorageProvider_value[strings.ToUpper(kb.StorageConfig.Provider)],
+						),
+						Region:          kb.StorageConfig.Region,
+						BucketName:      kb.StorageConfig.BucketName,
+						AccessKeyId:     kb.StorageConfig.SecretID,
+						SecretAccessKey: kb.StorageConfig.SecretKey,
+						AppId:           kb.StorageConfig.AppID,
+						PathPrefix:      kb.StorageConfig.PathPrefix,
+					},
+					VlmConfig: vlmConfig,
+				},
+				RequestId: payload.RequestId,
+			})
+			if err != nil {
+				// 如果是最后一次重试，更新状态为失败
+				if isLastRetry {
+					knowledge.ParseStatus = "failed"
+					knowledge.ErrorMessage = err.Error()
+					knowledge.UpdatedAt = time.Now()
+					s.repo.UpdateKnowledge(ctx, knowledge)
+				}
+				return fmt.Errorf("failed to read from URL: %w", err)
+			}
+			chunks = urlResp.Chunks
 		}
-		chunks = urlResp.Chunks
 	} else if len(payload.Passages) > 0 {
 		// 文本段落导入
 		chunks := make([]*proto.Chunk, 0, len(payload.Passages))

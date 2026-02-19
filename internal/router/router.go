@@ -102,6 +102,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterKnowledgeBaseRoutes(v1, params.KBHandler)
 		RegisterKnowledgeTagRoutes(v1, params.TagHandler)
 		RegisterKnowledgeRoutes(v1, params.KnowledgeHandler)
+		RegisterURLAnalyzeRoutes(v1, params.KnowledgeHandler)
 		RegisterFAQRoutes(v1, params.FAQHandler)
 		RegisterChunkRoutes(v1, params.ChunkHandler)
 		RegisterSessionRoutes(v1, params.SessionHandler)
@@ -119,6 +120,14 @@ func NewRouter(params RouterParams) *gin.Engine {
 	}
 
 	return r
+}
+
+// RegisterURLAnalyzeRoutes 注册 URL 分析路由（挂在 KnowledgeHandler 上，独立于 knowledge-bases 前缀路由）
+func RegisterURLAnalyzeRoutes(r *gin.RouterGroup, handler *handler.KnowledgeHandler) {
+	knowledge := r.Group("/knowledge")
+	{
+		knowledge.POST("/url/analyze", handler.AnalyzeURL)
+	}
 }
 
 // RegisterChunkRoutes 注册分块相关的路由

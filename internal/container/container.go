@@ -26,6 +26,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Tencent/WeKnora/docreader/client"
+	firecrawl "github.com/mendableai/firecrawl-go/v2"
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	elasticsearchRepoV7 "github.com/Tencent/WeKnora/internal/application/repository/retriever/elasticsearch/v7"
 	elasticsearchRepoV8 "github.com/Tencent/WeKnora/internal/application/repository/retriever/elasticsearch/v8"
@@ -89,6 +90,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// External service clients
 	logger.Debugf(ctx, "[Container] Registering external service clients...")
 	must(container.Provide(initDocReaderClient))
+	must(container.Provide(initFirecrawlApp))
 	must(container.Provide(initOllamaService))
 	must(container.Provide(initNeo4jClient))
 	must(container.Provide(stream.NewStreamManager))
@@ -591,6 +593,27 @@ func initDocReaderClient(cfg *config.Config) (*client.Client, error) {
 		docReaderURL = cfg.DocReader.Addr
 	}
 	return client.NewClient(docReaderURL)
+}
+
+// initFirecrawlApp 创建 Firecrawl SDK 客户端
+// 若未配置 FIRECRAWL_API_URL，返回 nil（service 中做 nil 检查，回退到 DocReader）
+func initFirecrawlApp(cfg *config.Config) (*firecrawl.FirecrawlApp, error) {
+	apiURL := os.Getenv("FIRECRAWL_API_URL")
+	if apiURL == "" && cfg.Firecrawl != nil {
+		apiURL = cfg.Firecrawl.APIURL
+	}
+	if apiURL == "" {
+		return nil, nil
+	}
+	apiKey := os.Getenv("FIRECRAWL_API_KEY")
+	if apiKey == "" && cfg.Firecrawl != nil {
+		apiKey = cfg.Firecrawl.APIKey
+	}
+	app, err := firecrawl.NewFirecrawlApp(apiKey, apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create firecrawl app: %w", err)
+	}
+	return app, nil
 }
 
 // initOllamaService initializes the Ollama service client

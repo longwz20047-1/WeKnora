@@ -23,6 +23,8 @@ type Config struct {
 	Models          []ModelConfig          `yaml:"models"           json:"models"`
 	VectorDatabase  *VectorDatabaseConfig  `yaml:"vector_database"  json:"vector_database"`
 	DocReader       *DocReaderConfig       `yaml:"docreader"        json:"docreader"`
+	Firecrawl       *FirecrawlConfig       `yaml:"firecrawl"        json:"firecrawl"`
+	Browserless     *BrowserlessConfig     `yaml:"browserless"      json:"browserless"`
 	StreamManager   *StreamManagerConfig   `yaml:"stream_manager"   json:"stream_manager"`
 	ExtractManager  *ExtractManagerConfig  `yaml:"extract"          json:"extract"`
 	WebSearch       *WebSearchConfig       `yaml:"web_search"       json:"web_search"`
@@ -31,6 +33,21 @@ type Config struct {
 
 type DocReaderConfig struct {
 	Addr string `yaml:"addr" json:"addr"`
+}
+
+// FirecrawlConfig Firecrawl 抓取引擎配置
+type FirecrawlConfig struct {
+	APIURL  string `yaml:"api_url" json:"api_url"`
+	APIKey  string `yaml:"api_key" json:"api_key"`
+	Timeout int    `yaml:"timeout" json:"timeout"`
+}
+
+// BrowserlessConfig Browserless 无头浏览器配置
+type BrowserlessConfig struct {
+	URL         string `yaml:"url"          json:"url"`
+	ExternalURL string `yaml:"external_url" json:"external_url"`
+	Token       string `yaml:"token"        json:"token"`
+	MaxSessions int    `yaml:"max_sessions" json:"max_sessions"`
 }
 
 type VectorDatabaseConfig struct {

@@ -582,3 +582,16 @@ extract:
 tenant:
   # 是否启用跨租户访问功能（内网环境可开启）
   enable_cross_tenant_access: false
+
+# Firecrawl 抓取引擎配置
+firecrawl:
+  api_url: ${FIRECRAWL_API_URL}
+  api_key: ${FIRECRAWL_API_KEY}
+  timeout: 60
+
+# Browserless 无头浏览器配置
+browserless:
+  url: ${BROWSERLESS_URL}
+  external_url: ${BROWSERLESS_EXTERNAL_URL}
+  token: ${BROWSERLESS_TOKEN}
+  max_sessions: 5
