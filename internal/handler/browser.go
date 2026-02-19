@@ -12,7 +12,8 @@ import (
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
-	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
@@ -55,6 +56,11 @@ type SessionInfo struct {
 	TabCtx      context.Context    //nolint:containedctx
 	TabCancel   context.CancelFunc
 	CreatedAt   time.Time
+
+	// Screencast: latest frame protected by frameMu
+	frameMu   sync.RWMutex
+	frameData string // base64-encoded JPEG
+	frameSeq  int64  // incrementing sequence number
 }
 
 type sessionStore struct {
@@ -141,7 +147,6 @@ type createSessionRequest struct {
 type createSessionResponse struct {
 	SessionID    string `json:"session_id"`
 	DebuggerURL  string `json:"debugger_url"`
-	LiveURL      string `json:"live_url,omitempty"`
 	TargetID     string `json:"target_id"`
 	InitialURL   string `json:"initial_url"`
 }
@@ -221,29 +226,37 @@ func (h *BrowserHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
-	// Try to obtain a LiveURL via Browserless CDP extension.
-	// LiveURL provides a clean interactive browser view (no DevTools panels).
-	var liveURL string
-	liveErr := chromedp.Run(tabCtx, chromedp.ActionFunc(func(actCtx context.Context) error {
-		executor := cdp.ExecutorFromContext(actCtx)
-		if executor == nil {
-			return fmt.Errorf("no CDP executor in context")
+	// Set up screencast: listen for frames and start streaming.
+	sess := &SessionInfo{
+		TargetID:    tid,
+		AllocCtx:    allocCtx,
+		AllocCancel: allocCancel,
+		TabCtx:      tabCtx,
+		TabCancel:   tabCancel,
+		CreatedAt:   time.Now(),
+	}
+
+	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
+		if frame, ok := ev.(*page.EventScreencastFrame); ok {
+			sess.frameMu.Lock()
+			sess.frameData = frame.Data
+			sess.frameSeq++
+			sess.frameMu.Unlock()
+			// Acknowledge the frame asynchronously to avoid blocking the event loop.
+			go func(sid int64) {
+				_ = chromedp.Run(tabCtx, page.ScreencastFrameAck(sid))
+			}(frame.SessionID)
 		}
-		var result struct {
-			LiveURL string `json:"liveURL"`
-		}
-		if err := executor.Execute(actCtx, "Browserless.liveURL", map[string]any{
-			"timeout":      300000,
-			"interactable": true,
-			"quality":      75,
-		}, &result); err != nil {
-			return err
-		}
-		liveURL = result.LiveURL
-		return nil
-	}))
-	if liveErr != nil {
-		logger.Warnf(ctx, "BrowserHandler.CreateSession: Browserless.liveURL failed (falling back to DevTools URL): %v", liveErr)
+	})
+
+	if scErr := chromedp.Run(tabCtx,
+		page.StartScreencast().
+			WithFormat(page.ScreencastFormatJpeg).
+			WithQuality(60).
+			WithMaxWidth(1440).
+			WithMaxHeight(900),
+	); scErr != nil {
+		logger.Warnf(ctx, "BrowserHandler.CreateSession: StartScreencast failed (preview unavailable): %v", scErr)
 	}
 
 	// Fallback: build DevTools inspector URL from ExternalURL.
@@ -258,20 +271,12 @@ func (h *BrowserHandler) CreateSession(c *gin.Context) {
 	}
 
 	sessionID := uuid.New().String()
-	h.sessions.Set(sessionID, &SessionInfo{
-		TargetID:    tid,
-		AllocCtx:    allocCtx,
-		AllocCancel: allocCancel,
-		TabCtx:      tabCtx,
-		TabCancel:   tabCancel,
-		CreatedAt:   time.Now(),
-	})
+	h.sessions.Set(sessionID, sess)
 
-	logger.Infof(ctx, "BrowserHandler.CreateSession: session=%s target=%s liveURL=%v", sessionID, tid, liveURL != "")
+	logger.Infof(ctx, "BrowserHandler.CreateSession: session=%s target=%s screencast=started", sessionID, tid)
 	c.JSON(http.StatusOK, createSessionResponse{
 		SessionID:   sessionID,
 		DebuggerURL: debuggerURL,
-		LiveURL:     liveURL,
 		TargetID:    string(tid),
 		InitialURL:  currentURL,
 	})
@@ -523,5 +528,158 @@ func buildScreenshotReadRequest(screenshotBytes []byte) *proto.ReadFromFileReque
 			ChunkSize:    500,
 			ChunkOverlap: 50,
 		},
+	}
+}
+
+// ─── ScreenStream (SSE) ─────────────────────────────────────────────────────
+
+// ScreenStream godoc
+// @Summary      获取浏览器屏幕流
+// @Description  通过 SSE 推送 Browserless 页面的 screencast JPEG 帧（base64）
+// @Tags         浏览器采集
+// @Produce      text/event-stream
+// @Param        id  path  string  true  "会话 ID"
+// @Success      200  {string}  string  "SSE 帧流"
+// @Failure      404  {object}  map[string]interface{}
+// @Security     Bearer
+// @Router       /browser/screen/{id} [get]
+func (h *BrowserHandler) ScreenStream(c *gin.Context) {
+	id := c.Param("id")
+	sess, ok := h.sessions.Get(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	reqCtx := c.Request.Context()
+	ticker := time.NewTicker(50 * time.Millisecond) // ~20 fps polling
+	defer ticker.Stop()
+
+	var lastSeq int64
+	for {
+		select {
+		case <-reqCtx.Done():
+			return
+		case <-sess.TabCtx.Done():
+			return
+		case <-ticker.C:
+			sess.frameMu.RLock()
+			seq := sess.frameSeq
+			data := sess.frameData
+			sess.frameMu.RUnlock()
+
+			if seq > lastSeq && data != "" {
+				lastSeq = seq
+				fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+				c.Writer.Flush()
+			}
+		}
+	}
+}
+
+// ─── SendInput ───────────────────────────────────────────────────────────────
+
+type browserInputEvent struct {
+	Type      string  `json:"type" binding:"required"` // mousemove|mousedown|mouseup|wheel|keydown|keyup
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Button    string  `json:"button"`
+	DeltaX    float64 `json:"deltaX"`
+	DeltaY    float64 `json:"deltaY"`
+	Key       string  `json:"key"`
+	Code      string  `json:"code"`
+	Text      string  `json:"text"`
+	Modifiers int64   `json:"modifiers"`
+}
+
+// SendInput godoc
+// @Summary      转发用户输入到浏览器
+// @Description  将鼠标/键盘事件通过 CDP 转发到 Browserless 页面
+// @Tags         浏览器采集
+// @Accept       json
+// @Param        id       path  string            true  "会话 ID"
+// @Param        request  body  browserInputEvent  true  "输入事件"
+// @Success      204
+// @Failure      400  {object}  map[string]interface{}
+// @Failure      404  {object}  map[string]interface{}
+// @Security     Bearer
+// @Router       /browser/input/{id} [post]
+func (h *BrowserHandler) SendInput(c *gin.Context) {
+	id := c.Param("id")
+	sess, ok := h.sessions.Get(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在"})
+		return
+	}
+
+	var ev browserInputEvent
+	if err := c.ShouldBindJSON(&ev); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的输入事件"})
+		return
+	}
+
+	var action chromedp.Action
+	btn := mapMouseButton(ev.Button)
+
+	switch ev.Type {
+	case "mousemove":
+		action = input.DispatchMouseEvent(input.MouseMoved, ev.X, ev.Y).
+			WithButton(btn).
+			WithModifiers(input.Modifier(ev.Modifiers))
+	case "mousedown":
+		action = input.DispatchMouseEvent(input.MousePressed, ev.X, ev.Y).
+			WithButton(btn).
+			WithClickCount(1).
+			WithModifiers(input.Modifier(ev.Modifiers))
+	case "mouseup":
+		action = input.DispatchMouseEvent(input.MouseReleased, ev.X, ev.Y).
+			WithButton(btn).
+			WithClickCount(1).
+			WithModifiers(input.Modifier(ev.Modifiers))
+	case "wheel":
+		action = input.DispatchMouseEvent(input.MouseWheel, ev.X, ev.Y).
+			WithDeltaX(ev.DeltaX).
+			WithDeltaY(ev.DeltaY).
+			WithModifiers(input.Modifier(ev.Modifiers))
+	case "keydown":
+		action = input.DispatchKeyEvent(input.KeyDown).
+			WithKey(ev.Key).
+			WithCode(ev.Code).
+			WithText(ev.Text).
+			WithModifiers(input.Modifier(ev.Modifiers))
+	case "keyup":
+		action = input.DispatchKeyEvent(input.KeyUp).
+			WithKey(ev.Key).
+			WithCode(ev.Code).
+			WithModifiers(input.Modifier(ev.Modifiers))
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的事件类型: " + ev.Type})
+		return
+	}
+
+	if err := chromedp.Run(sess.TabCtx, action); err != nil {
+		logger.Warnf(c.Request.Context(), "BrowserHandler.SendInput: %s failed: %v", ev.Type, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// mapMouseButton converts a JS button name to a CDP MouseButton constant.
+func mapMouseButton(btn string) input.MouseButton {
+	switch btn {
+	case "left":
+		return input.Left
+	case "right":
+		return input.Right
+	case "middle":
+		return input.Middle
+	default:
+		return input.None
 	}
 }

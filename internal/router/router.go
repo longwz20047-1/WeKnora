@@ -560,5 +560,7 @@ func RegisterBrowserRoutes(r *gin.RouterGroup, h *handler.BrowserHandler) {
 		browser.POST("/session", h.CreateSession)
 		browser.DELETE("/session/:id", h.CloseSession)
 		browser.POST("/capture", h.Capture)
+		browser.GET("/screen/:id", h.ScreenStream)
+		browser.POST("/input/:id", h.SendInput)
 	}
 }
