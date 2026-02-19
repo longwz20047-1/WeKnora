@@ -791,3 +791,14 @@ func (r *chunkRepository) FAQChunkDiff(
 
 	return chunksToAdd, chunksToDelete, nil
 }
+
+// SumTextContentLength returns the total character count of all text-type chunks
+// belonging to the given knowledge item.
+func (r *chunkRepository) SumTextContentLength(ctx context.Context, tenantID uint64, knowledgeID string) (int64, error) {
+	var total int64
+	err := r.db.WithContext(ctx).Model(&types.Chunk{}).
+		Where("tenant_id = ? AND knowledge_id = ? AND chunk_type = ?", tenantID, knowledgeID, types.ChunkTypeText).
+		Select("COALESCE(SUM(LENGTH(content)), 0)").
+		Scan(&total).Error
+	return total, err
+}

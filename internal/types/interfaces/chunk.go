@@ -82,6 +82,9 @@ type ChunkRepository interface {
 	// FAQChunkDiff compares FAQ chunks between two knowledge bases and returns the differences.
 	// Returns: chunksToAdd (content_hash in src but not in dst), chunksToDelete (content_hash in dst but not in src)
 	FAQChunkDiff(ctx context.Context, srcTenantID uint64, srcKBID string, dstTenantID uint64, dstKBID string) (chunksToAdd []string, chunksToDelete []string, err error)
+	// SumTextContentLength returns the total character count of all text-type chunks
+	// belonging to the given knowledge item and tenant.
+	SumTextContentLength(ctx context.Context, tenantID uint64, knowledgeID string) (int64, error)
 }
 
 // ChunkService defines the interface for chunk service operations

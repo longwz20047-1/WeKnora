@@ -7874,3 +7874,146 @@ func (s *knowledgeService) ProcessKnowledgeListDelete(ctx context.Context, t *as
 	logger.Infof(ctx, "Successfully deleted %d knowledge items", len(payload.KnowledgeIDs))
 	return nil
 }
+
+// CreateKnowledgeFromExtracted creates a knowledge item from browser-extracted text content.
+// It follows the same passage pipeline as CreateKnowledgeFromPassage but uses type "url"
+// so the record is associated with the source page.
+func (s *knowledgeService) CreateKnowledgeFromExtracted(
+	ctx context.Context,
+	kbID, title, content, tagID string,
+) (*types.Knowledge, error) {
+	logger.Infof(ctx, "CreateKnowledgeFromExtracted: kbID=%s title=%q len=%d", kbID, title, len(content))
+
+	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+
+	knowledge := &types.Knowledge{
+		ID:               uuid.New().String(),
+		TenantID:         tenantID,
+		KnowledgeBaseID:  kbID,
+		Type:             "url",
+		Title:            title,
+		ParseStatus:      "pending",
+		EnableStatus:     "disabled",
+		TagID:            tagID,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+		EmbeddingModelID: kb.EmbeddingModelID,
+	}
+
+	if err := s.repo.CreateKnowledge(ctx, knowledge); err != nil {
+		return nil, err
+	}
+
+	enableQuestionGeneration := false
+	questionCount := 3
+	if kb.QuestionGenerationConfig != nil && kb.QuestionGenerationConfig.Enabled {
+		enableQuestionGeneration = true
+		if kb.QuestionGenerationConfig.QuestionCount > 0 {
+			questionCount = kb.QuestionGenerationConfig.QuestionCount
+		}
+	}
+
+	taskPayload := types.DocumentProcessPayload{
+		TenantID:                 tenantID,
+		KnowledgeID:              knowledge.ID,
+		KnowledgeBaseID:          kbID,
+		Passages:                 []string{content},
+		EnableMultimodel:         false,
+		EnableQuestionGeneration: enableQuestionGeneration,
+		QuestionCount:            questionCount,
+	}
+
+	payloadBytes, err := json.Marshal(taskPayload)
+	if err != nil {
+		logger.Errorf(ctx, "CreateKnowledgeFromExtracted: marshal payload failed: %v", err)
+		return knowledge, nil
+	}
+
+	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	if info, enqErr := s.task.Enqueue(task); enqErr != nil {
+		logger.Errorf(ctx, "CreateKnowledgeFromExtracted: enqueue failed: %v", enqErr)
+	} else {
+		logger.Infof(ctx, "CreateKnowledgeFromExtracted: enqueued id=%s knowledge=%s", info.ID, knowledge.ID)
+	}
+
+	return knowledge, nil
+}
+
+// ReplaceKnowledgeContent clears all chunks for the given knowledge item and
+// re-queues it for processing with the supplied text content.
+func (s *knowledgeService) ReplaceKnowledgeContent(ctx context.Context, id, content string) error {
+	logger.Infof(ctx, "ReplaceKnowledgeContent: id=%s len=%d", id, len(content))
+
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+	existing, err := s.repo.GetKnowledgeByID(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+
+	if err := s.cleanupKnowledgeResources(ctx, existing); err != nil {
+		logger.Warnf(ctx, "ReplaceKnowledgeContent: cleanup partial failure for %s: %v", id, err)
+	}
+
+	existing.ParseStatus = "pending"
+	existing.EnableStatus = "disabled"
+	existing.UpdatedAt = time.Now()
+	if err := s.repo.UpdateKnowledge(ctx, existing); err != nil {
+		return err
+	}
+
+	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, existing.KnowledgeBaseID)
+	if err != nil {
+		return err
+	}
+
+	enableQuestionGeneration := false
+	questionCount := 3
+	if kb.QuestionGenerationConfig != nil && kb.QuestionGenerationConfig.Enabled {
+		enableQuestionGeneration = true
+		if kb.QuestionGenerationConfig.QuestionCount > 0 {
+			questionCount = kb.QuestionGenerationConfig.QuestionCount
+		}
+	}
+
+	taskPayload := types.DocumentProcessPayload{
+		TenantID:                 tenantID,
+		KnowledgeID:              existing.ID,
+		KnowledgeBaseID:          existing.KnowledgeBaseID,
+		Passages:                 []string{content},
+		EnableMultimodel:         false,
+		EnableQuestionGeneration: enableQuestionGeneration,
+		QuestionCount:            questionCount,
+	}
+
+	payloadBytes, err := json.Marshal(taskPayload)
+	if err != nil {
+		return fmt.Errorf("ReplaceKnowledgeContent: marshal payload: %w", err)
+	}
+
+	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	if _, enqErr := s.task.Enqueue(task); enqErr != nil {
+		return fmt.Errorf("ReplaceKnowledgeContent: enqueue: %w", enqErr)
+	}
+
+	logger.Infof(ctx, "ReplaceKnowledgeContent: re-queued knowledge=%s", existing.ID)
+	return nil
+}
+
+// GetKnowledgeContentLength returns the total character count of all text chunks
+// for the given knowledge item. Returns 0 when parse_status is not 'completed'.
+func (s *knowledgeService) GetKnowledgeContentLength(ctx context.Context, id string) (int64, error) {
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+	knowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, id)
+	if err != nil {
+		return 0, err
+	}
+	if knowledge.ParseStatus != types.ParseStatusCompleted {
+		return 0, nil
+	}
+	return s.chunkRepo.SumTextContentLength(ctx, tenantID, id)
+}

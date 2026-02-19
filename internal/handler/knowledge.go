@@ -526,17 +526,22 @@ func (h *KnowledgeHandler) GetKnowledge(c *gin.Context) {
 	}
 
 	// Resolve knowledge and validate KB access (at least viewer)
-	knowledge, _, err := h.resolveKnowledgeAndValidateKBAccess(c, id, types.OrgRoleViewer)
+	knowledge, resolvedCtx, err := h.resolveKnowledgeAndValidateKBAccess(c, id, types.OrgRoleViewer)
 	if err != nil {
 		c.Error(err)
 		return
 	}
 
+	contentLength, _ := h.kgService.GetKnowledgeContentLength(resolvedCtx, id)
+
 	logger.Infof(ctx, "Knowledge retrieved successfully, ID: %s, title: %s",
 		secutils.SanitizeForLog(knowledge.ID), secutils.SanitizeForLog(knowledge.Title))
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    knowledge,
+		"data": struct {
+			*types.Knowledge
+			ContentLength int64 `json:"content_length"`
+		}{Knowledge: knowledge, ContentLength: contentLength},
 	})
 }
 

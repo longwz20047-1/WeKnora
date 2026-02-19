@@ -196,4 +196,14 @@ type KnowledgeRepository interface {
 	SearchKnowledgeInScopes(ctx context.Context, scopes []types.KnowledgeSearchScope, keyword string, offset, limit int, fileTypes []string) ([]*types.Knowledge, bool, error)
 	// ListIDsByTagID returns all knowledge IDs that have the specified tag ID.
 	ListIDsByTagID(ctx context.Context, tenantID uint64, kbID, tagID string) ([]string, error)
+	// CreateKnowledgeFromExtracted creates a knowledge entry from pre-extracted text content
+	// (e.g., text captured by browser). The content is stored as passages and processed
+	// through the normal chunking pipeline.
+	CreateKnowledgeFromExtracted(ctx context.Context, kbID, title, content, tagID string) (*types.Knowledge, error)
+	// ReplaceKnowledgeContent clears the existing chunks for a knowledge item and
+	// re-queues it for processing with new text content.
+	ReplaceKnowledgeContent(ctx context.Context, id, content string) error
+	// GetKnowledgeContentLength returns the total character count of all text chunks
+	// for the given knowledge item. Returns 0 when parse_status is not 'completed'.
+	GetKnowledgeContentLength(ctx context.Context, id string) (int64, error)
 }

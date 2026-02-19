@@ -50,6 +50,7 @@ type RouterParams struct {
 	CustomAgentHandler    *handler.CustomAgentHandler
 	SkillHandler          *handler.SkillHandler
 	OrganizationHandler   *handler.OrganizationHandler
+	BrowserHandler        *handler.BrowserHandler
 }
 
 // NewRouter 创建新的路由
@@ -117,6 +118,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterCustomAgentRoutes(v1, params.CustomAgentHandler)
 		RegisterSkillRoutes(v1, params.SkillHandler)
 		RegisterOrganizationRoutes(v1, params.OrganizationHandler)
+		RegisterBrowserRoutes(v1, params.BrowserHandler)
 	}
 
 	return r
@@ -545,4 +547,18 @@ func RegisterOrganizationRoutes(r *gin.RouterGroup, orgHandler *handler.Organiza
 	// Shared agents route
 	r.GET("/shared-agents", orgHandler.ListSharedAgents)
 	r.POST("/shared-agents/disabled", orgHandler.SetSharedAgentDisabledByMe)
+}
+
+
+// RegisterBrowserRoutes 注册 Browserless 浏览器采集相关路由
+func RegisterBrowserRoutes(r *gin.RouterGroup, h *handler.BrowserHandler) {
+	if h == nil {
+		return
+	}
+	browser := r.Group("/browser")
+	{
+		browser.POST("/session", h.CreateSession)
+		browser.DELETE("/session/:id", h.CloseSession)
+		browser.POST("/capture", h.Capture)
+	}
 }
