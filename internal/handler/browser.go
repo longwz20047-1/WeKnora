@@ -12,6 +12,7 @@ import (
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
@@ -140,6 +141,7 @@ type createSessionRequest struct {
 type createSessionResponse struct {
 	SessionID    string `json:"session_id"`
 	DebuggerURL  string `json:"debugger_url"`
+	LiveURL      string `json:"live_url,omitempty"`
 	TargetID     string `json:"target_id"`
 	InitialURL   string `json:"initial_url"`
 }
@@ -182,6 +184,7 @@ func (h *BrowserHandler) CreateSession(c *gin.Context) {
 	// Navigate to the initial URL and capture page info.
 	var currentURL string
 	if runErr := chromedp.Run(tabCtx,
+		chromedp.EmulateViewport(1440, 900),
 		chromedp.Navigate(req.URL),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.Location(&currentURL),
@@ -218,7 +221,32 @@ func (h *BrowserHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
-	// Build debugger URL from ExternalURL (for the browser DevTools UI).
+	// Try to obtain a LiveURL via Browserless CDP extension.
+	// LiveURL provides a clean interactive browser view (no DevTools panels).
+	var liveURL string
+	liveErr := chromedp.Run(tabCtx, chromedp.ActionFunc(func(actCtx context.Context) error {
+		executor := cdp.ExecutorFromContext(actCtx)
+		if executor == nil {
+			return fmt.Errorf("no CDP executor in context")
+		}
+		var result struct {
+			LiveURL string `json:"liveURL"`
+		}
+		if err := executor.Execute(actCtx, "Browserless.liveURL", map[string]any{
+			"timeout":      300000,
+			"interactable": true,
+			"quality":      75,
+		}, &result); err != nil {
+			return err
+		}
+		liveURL = result.LiveURL
+		return nil
+	}))
+	if liveErr != nil {
+		logger.Warnf(ctx, "BrowserHandler.CreateSession: Browserless.liveURL failed (falling back to DevTools URL): %v", liveErr)
+	}
+
+	// Fallback: build DevTools inspector URL from ExternalURL.
 	debuggerURL := ""
 	if h.cfg.Browserless != nil && h.cfg.Browserless.ExternalURL != "" {
 		ext := strings.TrimRight(h.cfg.Browserless.ExternalURL, "/")
@@ -239,10 +267,11 @@ func (h *BrowserHandler) CreateSession(c *gin.Context) {
 		CreatedAt:   time.Now(),
 	})
 
-	logger.Infof(ctx, "BrowserHandler.CreateSession: session=%s target=%s", sessionID, tid)
+	logger.Infof(ctx, "BrowserHandler.CreateSession: session=%s target=%s liveURL=%v", sessionID, tid, liveURL != "")
 	c.JSON(http.StatusOK, createSessionResponse{
 		SessionID:   sessionID,
 		DebuggerURL: debuggerURL,
+		LiveURL:     liveURL,
 		TargetID:    string(tid),
 		InitialURL:  currentURL,
 	})
