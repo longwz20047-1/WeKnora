@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -237,21 +238,29 @@ func extractMetaDescription(html string) string {
 	return ""
 }
 
+// AnalyzeURLResult extends AnalyzeResult with duplicate detection info.
+type AnalyzeURLResult struct {
+	AnalyzeResult
+	IsDuplicate          bool   `json:"is_duplicate"`
+	ExistingKnowledgeID  string `json:"existing_knowledge_id,omitempty"`
+}
+
 // AnalyzeURL godoc
 // @Summary      分析 URL 可采集性
-// @Description  对目标 URL 进行 HTTP 探测，返回推荐采集方式（auto/manual）
+// @Description  对目标 URL 进行 HTTP 探测，返回推荐采集方式（auto/manual）。若提供 kb_id 则同时检查是否为重复 URL。
 // @Tags         知识管理
 // @Accept       json
 // @Produce      json
-// @Param        request  body      object{url=string}  true  "URL 请求"
-// @Success      200      {object}  AnalyzeResult
+// @Param        request  body      object{url=string,kb_id=string}  true  "URL 请求"
+// @Success      200      {object}  AnalyzeURLResult
 // @Failure      400      {object}  map[string]interface{}
 // @Security     Bearer
 // @Security     ApiKeyAuth
 // @Router       /knowledge/url/analyze [post]
 func (h *KnowledgeHandler) AnalyzeURL(c *gin.Context) {
 	var req struct {
-		URL string `json:"url" binding:"required,url"`
+		URL  string `json:"url" binding:"required,url"`
+		KBID string `json:"kb_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 URL"})
@@ -261,6 +270,22 @@ func (h *KnowledgeHandler) AnalyzeURL(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不允许访问内网地址"})
 		return
 	}
-	result := analyzeURL(c.Request.Context(), req.URL)
+	ctx := c.Request.Context()
+	result := AnalyzeURLResult{AnalyzeResult: analyzeURL(ctx, req.URL)}
+
+	// If kb_id is provided, check whether this URL already exists in the knowledge base.
+	if req.KBID != "" {
+		if tenantID, ok := ctx.Value(types.TenantIDContextKey).(uint64); ok && tenantID > 0 {
+			exists, existing, err := h.kgService.GetRepository().CheckKnowledgeExists(ctx, tenantID, req.KBID, &types.KnowledgeCheckParams{
+				Type: "url",
+				URL:  req.URL,
+			})
+			if err == nil && exists && existing != nil {
+				result.IsDuplicate = true
+				result.ExistingKnowledgeID = existing.ID
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, result)
 }
