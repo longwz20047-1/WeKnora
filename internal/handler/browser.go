@@ -2,8 +2,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"net/http"
 	"net/url"
 	"strings"
@@ -479,13 +482,25 @@ func (h *BrowserHandler) captureScreenshotOCR(
 
 	if err := chromedp.Run(captureCtx,
 		chromedp.Location(&currentURL),
-		chromedp.FullScreenshot(&screenshotBuf, 85), // JPEG quality 85, full page
+		chromedp.FullScreenshot(&screenshotBuf, 50), // JPEG quality 50
 	); err != nil {
 		logger.Errorf(ctx, "captureScreenshotOCR: chromedp run failed: %v", err)
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "截图失败: " + err.Error()}
 	}
 
-	logger.Infof(ctx, "captureScreenshotOCR: screenshot size=%d bytes, url=%s", len(screenshotBuf), currentURL)
+	logger.Infof(ctx, "captureScreenshotOCR: raw screenshot size=%d bytes, url=%s", len(screenshotBuf), currentURL)
+
+	// DocReader rejects images >1 MB. Compress if needed.
+	const maxImageBytes = 900 * 1024 // 900 KB, leave margin for 1 MB limit
+	if len(screenshotBuf) > maxImageBytes {
+		compressed, compErr := compressJPEG(screenshotBuf, maxImageBytes)
+		if compErr != nil {
+			logger.Warnf(ctx, "captureScreenshotOCR: compress failed: %v, using original", compErr)
+		} else {
+			logger.Infof(ctx, "captureScreenshotOCR: compressed %d -> %d bytes", len(screenshotBuf), len(compressed))
+			screenshotBuf = compressed
+		}
+	}
 
 	if currentURL == "" {
 		currentURL = req.CurrentURL
@@ -619,6 +634,44 @@ func (h *BrowserHandler) resolveVLMConfig(ctx context.Context, kb *types.Knowled
 		ApiKey:        model.Parameters.APIKey,
 		InterfaceType: interfaceType,
 	}, nil
+}
+
+// compressJPEG re-encodes a JPEG image at progressively lower quality until it
+// fits within maxBytes. If quality 15 is still too large, it halves the image
+// dimensions and tries again.
+func compressJPEG(data []byte, maxBytes int) ([]byte, error) {
+	img, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode jpeg: %w", err)
+	}
+
+	// Try progressively lower quality.
+	for _, q := range []int{40, 30, 20, 15} {
+		var buf bytes.Buffer
+		if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: q}); err != nil {
+			return nil, fmt.Errorf("encode jpeg q=%d: %w", q, err)
+		}
+		if buf.Len() <= maxBytes {
+			return buf.Bytes(), nil
+		}
+	}
+
+	// Still too large — halve the dimensions and retry at quality 30.
+	bounds := img.Bounds()
+	halfW, halfH := bounds.Dx()/2, bounds.Dy()/2
+	resized := image.NewRGBA(image.Rect(0, 0, halfW, halfH))
+	// Simple nearest-neighbor downscale.
+	for y := 0; y < halfH; y++ {
+		for x := 0; x < halfW; x++ {
+			resized.Set(x, y, img.At(bounds.Min.X+x*2, bounds.Min.Y+y*2))
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, resized, &jpeg.Options{Quality: 30}); err != nil {
+		return nil, fmt.Errorf("encode resized jpeg: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // buildScreenshotReadRequest creates a DocReader ReadFromFileRequest for PNG screenshot bytes.
