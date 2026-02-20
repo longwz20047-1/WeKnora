@@ -24,6 +24,7 @@ import (
 	"github.com/Tencent/WeKnora/docreader/proto"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
 
@@ -104,22 +105,28 @@ func (s *sessionStore) Delete(id string) {
 
 // BrowserHandler manages Browserless sessions and page-capture requests.
 type BrowserHandler struct {
-	cfg       *config.Config
-	kgService interfaces.KnowledgeService
-	docReader *drclient.Client
-	sessions  sessionStore
+	cfg          *config.Config
+	kgService    interfaces.KnowledgeService
+	kbService    interfaces.KnowledgeBaseService
+	modelService interfaces.ModelService
+	docReader    *drclient.Client
+	sessions     sessionStore
 }
 
 // NewBrowserHandler creates a new BrowserHandler.
 func NewBrowserHandler(
 	cfg *config.Config,
 	kgService interfaces.KnowledgeService,
+	kbService interfaces.KnowledgeBaseService,
+	modelService interfaces.ModelService,
 	docReader *drclient.Client,
 ) *BrowserHandler {
 	return &BrowserHandler{
-		cfg:       cfg,
-		kgService: kgService,
-		docReader: docReader,
+		cfg:          cfg,
+		kgService:    kgService,
+		kbService:    kbService,
+		modelService: modelService,
+		docReader:    docReader,
 		sessions: sessionStore{
 			data: make(map[string]*SessionInfo),
 		},
@@ -457,7 +464,7 @@ func (h *BrowserHandler) captureText(
 }
 
 // captureScreenshotOCR takes a full-page screenshot, sends it to DocReader for
-// OCR, and stores the extracted text as knowledge.
+// OCR (with VLM if configured), and stores the extracted text as knowledge.
 func (h *BrowserHandler) captureScreenshotOCR(
 	ctx context.Context,
 	captureCtx context.Context,
@@ -468,7 +475,7 @@ func (h *BrowserHandler) captureScreenshotOCR(
 
 	if err := chromedp.Run(captureCtx,
 		chromedp.Location(&currentURL),
-		chromedp.FullScreenshot(&screenshotBuf, 0), // quality=0 → lossless PNG, matches buildScreenshotReadRequest
+		chromedp.FullScreenshot(&screenshotBuf, 0), // quality=0 → lossless PNG
 	); err != nil {
 		logger.Errorf(ctx, "captureScreenshotOCR: chromedp run failed: %v", err)
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "截图失败: " + err.Error()}
@@ -478,8 +485,45 @@ func (h *BrowserHandler) captureScreenshotOCR(
 		currentURL = req.CurrentURL
 	}
 
-	// Send screenshot bytes to DocReader for OCR.
-	resp, err := h.docReader.ReadFromFile(ctx, buildScreenshotReadRequest(screenshotBuf))
+	// Build ReadConfig from the knowledge base's VLM and storage settings.
+	readCfg := &proto.ReadConfig{
+		ChunkSize:    500,
+		ChunkOverlap: 50,
+	}
+
+	kb, kbErr := h.kbService.GetKnowledgeBaseByID(ctx, req.KnowledgeBaseID)
+	if kbErr != nil {
+		logger.Warnf(ctx, "captureScreenshotOCR: get KB failed (basic OCR fallback): %v", kbErr)
+	} else {
+		// Enable multimodal + storage config so DocReader can process the image.
+		readCfg.EnableMultimodal = true
+		readCfg.StorageConfig = &proto.StorageConfig{
+			Provider: proto.StorageProvider(
+				proto.StorageProvider_value[strings.ToUpper(kb.StorageConfig.Provider)],
+			),
+			Region:         kb.StorageConfig.Region,
+			BucketName:     kb.StorageConfig.BucketName,
+			AccessKeyId:    kb.StorageConfig.SecretID,
+			SecretAccessKey: kb.StorageConfig.SecretKey,
+			AppId:          kb.StorageConfig.AppID,
+			PathPrefix:     kb.StorageConfig.PathPrefix,
+		}
+
+		// Resolve VLM config (supports both legacy and model-ID based configs).
+		vlmCfg, vlmErr := h.resolveVLMConfig(ctx, kb)
+		if vlmErr != nil {
+			logger.Warnf(ctx, "captureScreenshotOCR: resolve VLM config failed: %v", vlmErr)
+		} else if vlmCfg != nil {
+			readCfg.VlmConfig = vlmCfg
+		}
+	}
+
+	resp, err := h.docReader.ReadFromFile(ctx, &proto.ReadFromFileRequest{
+		FileContent: screenshotBuf,
+		FileName:    "screenshot.png",
+		FileType:    "png",
+		ReadConfig:  readCfg,
+	})
 	if err != nil {
 		logger.Errorf(ctx, "captureScreenshotOCR: DocReader OCR failed: %v", err)
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "OCR 失败: " + err.Error()}
@@ -525,7 +569,44 @@ func (h *BrowserHandler) captureScreenshotOCR(
 	}
 }
 
+// resolveVLMConfig converts KB VLM settings to proto format, supporting both
+// legacy (model_name+base_url) and new (model_id) configurations.
+func (h *BrowserHandler) resolveVLMConfig(ctx context.Context, kb *types.KnowledgeBase) (*proto.VLMConfig, error) {
+	// Legacy version: direct credentials in VLMConfig.
+	if kb.VLMConfig.ModelName != "" && kb.VLMConfig.BaseURL != "" {
+		return &proto.VLMConfig{
+			ModelName:     kb.VLMConfig.ModelName,
+			BaseUrl:       kb.VLMConfig.BaseURL,
+			ApiKey:        kb.VLMConfig.APIKey,
+			InterfaceType: kb.VLMConfig.InterfaceType,
+		}, nil
+	}
+
+	// New version: resolve model_id through ModelService.
+	if !kb.VLMConfig.Enabled || kb.VLMConfig.ModelID == "" {
+		return nil, nil
+	}
+
+	model, err := h.modelService.GetModelByID(ctx, kb.VLMConfig.ModelID)
+	if err != nil {
+		return nil, err
+	}
+
+	interfaceType := model.Parameters.InterfaceType
+	if interfaceType == "" {
+		interfaceType = "openai"
+	}
+
+	return &proto.VLMConfig{
+		ModelName:     model.Name,
+		BaseUrl:       model.Parameters.BaseURL,
+		ApiKey:        model.Parameters.APIKey,
+		InterfaceType: interfaceType,
+	}, nil
+}
+
 // buildScreenshotReadRequest creates a DocReader ReadFromFileRequest for PNG screenshot bytes.
+// Used as a minimal fallback when knowledge base config is unavailable.
 func buildScreenshotReadRequest(screenshotBytes []byte) *proto.ReadFromFileRequest {
 	return &proto.ReadFromFileRequest{
 		FileContent: screenshotBytes,
