@@ -33,14 +33,23 @@ import (
 func htmlToMarkdown(htmlContent string, pageURL string) (markdown string, title string, err error) {
 	parsedURL, _ := url.Parse(pageURL)
 
+	// Try readability for article extraction and title.
 	article, readErr := readability.FromReader(strings.NewReader(htmlContent), parsedURL)
-	contentHTML := htmlContent
 	if readErr == nil {
-		contentHTML = article.Content
 		title = article.Title
 	}
 
-	markdown, err = htmltomarkdown.ConvertString(contentHTML, converter.WithDomain(pageURL))
+	// Convert readability's article content to Markdown first.
+	if readErr == nil && article.Content != "" {
+		md, convErr := htmltomarkdown.ConvertString(article.Content, converter.WithDomain(pageURL))
+		if convErr == nil && len(md) >= 200 {
+			return md, title, nil
+		}
+	}
+
+	// Readability extracted too little (app pages, settings pages, etc.).
+	// Fall back to converting the full HTML.
+	markdown, err = htmltomarkdown.ConvertString(htmlContent, converter.WithDomain(pageURL))
 	return markdown, title, err
 }
 
@@ -459,7 +468,7 @@ func (h *BrowserHandler) captureScreenshotOCR(
 
 	if err := chromedp.Run(captureCtx,
 		chromedp.Location(&currentURL),
-		chromedp.FullScreenshot(&screenshotBuf, 90),
+		chromedp.FullScreenshot(&screenshotBuf, 0), // quality=0 → lossless PNG, matches buildScreenshotReadRequest
 	); err != nil {
 		logger.Errorf(ctx, "captureScreenshotOCR: chromedp run failed: %v", err)
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "截图失败: " + err.Error()}
