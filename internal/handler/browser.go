@@ -481,41 +481,51 @@ func (h *BrowserHandler) captureScreenshotOCR(
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "截图失败: " + err.Error()}
 	}
 
+	logger.Infof(ctx, "captureScreenshotOCR: screenshot size=%d bytes, url=%s", len(screenshotBuf), currentURL)
+
 	if currentURL == "" {
 		currentURL = req.CurrentURL
 	}
 
-	// Build ReadConfig from the knowledge base's VLM and storage settings.
-	readCfg := &proto.ReadConfig{
-		ChunkSize:    500,
-		ChunkOverlap: 50,
-	}
-
+	// Fetch knowledge base to get VLM + storage config.
 	kb, kbErr := h.kbService.GetKnowledgeBaseByID(ctx, req.KnowledgeBaseID)
 	if kbErr != nil {
-		logger.Warnf(ctx, "captureScreenshotOCR: get KB failed (basic OCR fallback): %v", kbErr)
-	} else {
-		// Enable multimodal + storage config so DocReader can process the image.
-		readCfg.EnableMultimodal = true
-		readCfg.StorageConfig = &proto.StorageConfig{
+		logger.Errorf(ctx, "captureScreenshotOCR: get KB %s failed: %v", req.KnowledgeBaseID, kbErr)
+		return captureResultItem{Method: "screenshot_ocr", Success: false,
+			Error: "无法获取知识库配置: " + kbErr.Error()}
+	}
+
+	// Resolve VLM config — required for image OCR.
+	vlmCfg, vlmErr := h.resolveVLMConfig(ctx, kb)
+	if vlmErr != nil {
+		logger.Errorf(ctx, "captureScreenshotOCR: resolve VLM failed: %v", vlmErr)
+		return captureResultItem{Method: "screenshot_ocr", Success: false,
+			Error: "VLM 模型配置解析失败: " + vlmErr.Error()}
+	}
+	if vlmCfg == nil {
+		return captureResultItem{Method: "screenshot_ocr", Success: false,
+			Error: "该知识库未配置 VLM 模型，截图识别需要 VLM 支持。请在知识库设置中启用并选择 VLM 模型。"}
+	}
+
+	logger.Infof(ctx, "captureScreenshotOCR: VLM model=%s, storage=%s/%s",
+		vlmCfg.ModelName, kb.StorageConfig.Provider, kb.StorageConfig.BucketName)
+
+	readCfg := &proto.ReadConfig{
+		ChunkSize:        500,
+		ChunkOverlap:     50,
+		EnableMultimodal: true,
+		StorageConfig: &proto.StorageConfig{
 			Provider: proto.StorageProvider(
 				proto.StorageProvider_value[strings.ToUpper(kb.StorageConfig.Provider)],
 			),
-			Region:         kb.StorageConfig.Region,
-			BucketName:     kb.StorageConfig.BucketName,
-			AccessKeyId:    kb.StorageConfig.SecretID,
+			Region:          kb.StorageConfig.Region,
+			BucketName:      kb.StorageConfig.BucketName,
+			AccessKeyId:     kb.StorageConfig.SecretID,
 			SecretAccessKey: kb.StorageConfig.SecretKey,
-			AppId:          kb.StorageConfig.AppID,
-			PathPrefix:     kb.StorageConfig.PathPrefix,
-		}
-
-		// Resolve VLM config (supports both legacy and model-ID based configs).
-		vlmCfg, vlmErr := h.resolveVLMConfig(ctx, kb)
-		if vlmErr != nil {
-			logger.Warnf(ctx, "captureScreenshotOCR: resolve VLM config failed: %v", vlmErr)
-		} else if vlmCfg != nil {
-			readCfg.VlmConfig = vlmCfg
-		}
+			AppId:           kb.StorageConfig.AppID,
+			PathPrefix:      kb.StorageConfig.PathPrefix,
+		},
+		VlmConfig: vlmCfg,
 	}
 
 	resp, err := h.docReader.ReadFromFile(ctx, &proto.ReadFromFileRequest{
@@ -528,6 +538,8 @@ func (h *BrowserHandler) captureScreenshotOCR(
 		logger.Errorf(ctx, "captureScreenshotOCR: DocReader OCR failed: %v", err)
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "OCR 失败: " + err.Error()}
 	}
+
+	logger.Infof(ctx, "captureScreenshotOCR: DocReader returned %d chunks", len(resp.GetChunks()))
 
 	// Collect text from returned chunks.
 	var sb strings.Builder
