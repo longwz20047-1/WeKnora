@@ -358,7 +358,11 @@ type captureResultItem struct {
 // @Security     Bearer
 // @Router       /browser/capture [post]
 func (h *BrowserHandler) Capture(c *gin.Context) {
-	ctx := c.Request.Context()
+	// Use a context that preserves request values (tenant, user) but is NOT
+	// canceled when the HTTP client disconnects.  This prevents long-running
+	// DocReader OCR calls from being aborted by a frontend timeout.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Minute)
+	defer cancel()
 
 	var req captureRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
