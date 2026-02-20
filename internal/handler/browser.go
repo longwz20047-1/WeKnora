@@ -4,9 +4,12 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -470,8 +473,8 @@ func (h *BrowserHandler) captureText(
 	}
 }
 
-// captureScreenshotOCR takes a full-page screenshot, sends it to DocReader for
-// OCR (with VLM if configured), and stores the extracted text as knowledge.
+// captureScreenshotOCR takes a full-page screenshot, calls the VLM API directly
+// to extract visible text, and stores the result as knowledge.
 func (h *BrowserHandler) captureScreenshotOCR(
 	ctx context.Context,
 	captureCtx context.Context,
@@ -490,8 +493,8 @@ func (h *BrowserHandler) captureScreenshotOCR(
 
 	logger.Infof(ctx, "captureScreenshotOCR: raw screenshot size=%d bytes, url=%s", len(screenshotBuf), currentURL)
 
-	// DocReader rejects images >1 MB. Compress if needed.
-	const maxImageBytes = 900 * 1024 // 900 KB, leave margin for 1 MB limit
+	// VLM APIs typically have image size limits. Compress if needed.
+	const maxImageBytes = 900 * 1024
 	if len(screenshotBuf) > maxImageBytes {
 		compressed, compErr := compressJPEG(screenshotBuf, maxImageBytes)
 		if compErr != nil {
@@ -506,7 +509,7 @@ func (h *BrowserHandler) captureScreenshotOCR(
 		currentURL = req.CurrentURL
 	}
 
-	// Fetch knowledge base to get VLM + storage config.
+	// Fetch knowledge base to get VLM config.
 	kb, kbErr := h.kbService.GetKnowledgeBaseByID(ctx, req.KnowledgeBaseID)
 	if kbErr != nil {
 		logger.Errorf(ctx, "captureScreenshotOCR: get KB %s failed: %v", req.KnowledgeBaseID, kbErr)
@@ -514,7 +517,6 @@ func (h *BrowserHandler) captureScreenshotOCR(
 			Error: "无法获取知识库配置: " + kbErr.Error()}
 	}
 
-	// Resolve VLM config — required for image OCR.
 	vlmCfg, vlmErr := h.resolveVLMConfig(ctx, kb)
 	if vlmErr != nil {
 		logger.Errorf(ctx, "captureScreenshotOCR: resolve VLM failed: %v", vlmErr)
@@ -526,59 +528,23 @@ func (h *BrowserHandler) captureScreenshotOCR(
 			Error: "该知识库未配置 VLM 模型，截图识别需要 VLM 支持。请在知识库设置中启用并选择 VLM 模型。"}
 	}
 
-	logger.Infof(ctx, "captureScreenshotOCR: VLM model=%s, storage=%s/%s",
-		vlmCfg.ModelName, kb.StorageConfig.Provider, kb.StorageConfig.BucketName)
+	logger.Infof(ctx, "captureScreenshotOCR: calling VLM directly, model=%s, base_url=%s",
+		vlmCfg.ModelName, vlmCfg.BaseUrl)
 
-	readCfg := &proto.ReadConfig{
-		ChunkSize:        500,
-		ChunkOverlap:     50,
-		EnableMultimodal: true,
-		StorageConfig: &proto.StorageConfig{
-			Provider: proto.StorageProvider(
-				proto.StorageProvider_value[strings.ToUpper(kb.StorageConfig.Provider)],
-			),
-			Region:          kb.StorageConfig.Region,
-			BucketName:      kb.StorageConfig.BucketName,
-			AccessKeyId:     kb.StorageConfig.SecretID,
-			SecretAccessKey: kb.StorageConfig.SecretKey,
-			AppId:           kb.StorageConfig.AppID,
-			PathPrefix:      kb.StorageConfig.PathPrefix,
-		},
-		VlmConfig: vlmCfg,
+	// Call VLM API directly to extract text from screenshot.
+	text, ocrErr := callVLMForOCR(ctx, vlmCfg, screenshotBuf)
+	if ocrErr != nil {
+		logger.Errorf(ctx, "captureScreenshotOCR: VLM OCR failed: %v", ocrErr)
+		return captureResultItem{Method: "screenshot_ocr", Success: false,
+			Error: "截图识别失败: " + ocrErr.Error()}
 	}
 
-	resp, err := h.docReader.ReadFromFile(ctx, &proto.ReadFromFileRequest{
-		FileContent: screenshotBuf,
-		FileName:    "screenshot.jpg",
-		FileType:    "jpg",
-		ReadConfig:  readCfg,
-	})
-	if err != nil {
-		logger.Errorf(ctx, "captureScreenshotOCR: DocReader OCR failed: %v", err)
-		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "OCR 失败: " + err.Error()}
-	}
+	logger.Infof(ctx, "captureScreenshotOCR: VLM returned %d chars", len(text))
 
-	logger.Infof(ctx, "captureScreenshotOCR: DocReader returned %d chunks", len(resp.GetChunks()))
-
-	// Collect text from returned chunks.
-	// For image files, DocReader puts the OCR result in Images[].OcrText,
-	// while Content is just a markdown image reference like ![name](url).
-	var sb strings.Builder
-	for _, chunk := range resp.GetChunks() {
-		var ocrParts []string
-		for _, img := range chunk.GetImages() {
-			if img.GetOcrText() != "" {
-				ocrParts = append(ocrParts, img.GetOcrText())
-			}
-		}
-		if len(ocrParts) > 0 {
-			sb.WriteString(strings.Join(ocrParts, "\n\n"))
-		} else {
-			sb.WriteString(chunk.GetContent())
-		}
-		sb.WriteString("\n\n")
+	if len(text) < 10 {
+		return captureResultItem{Method: "screenshot_ocr", Success: false,
+			Error: "截图识别结果为空或内容过少"}
 	}
-	text := strings.TrimSpace(sb.String())
 
 	title := req.Title
 	if title == "" {
@@ -686,7 +652,86 @@ func compressJPEG(data []byte, maxBytes int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// buildScreenshotReadRequest creates a DocReader ReadFromFileRequest for PNG screenshot bytes.
+// callVLMForOCR sends a screenshot to the VLM API (OpenAI-compatible) and asks
+// it to extract all visible text from the image.
+func callVLMForOCR(ctx context.Context, vlmCfg *proto.VLMConfig, imgData []byte) (string, error) {
+	b64 := base64.StdEncoding.EncodeToString(imgData)
+	dataURI := "data:image/jpeg;base64," + b64
+
+	// Build OpenAI-compatible chat completion request with vision.
+	reqBody := map[string]interface{}{
+		"model": vlmCfg.ModelName,
+		"messages": []map[string]interface{}{
+			{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": "请详细提取这个网页截图中的所有可见文字内容。只需输出提取到的文字，不要加额外说明。保持原文的结构和层次。",
+					},
+					{
+						"type": "image_url",
+						"image_url": map[string]string{
+							"url": dataURI,
+						},
+					},
+				},
+			},
+		},
+		"max_tokens": 4096,
+		"temperature": 0.1,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	apiURL := strings.TrimRight(vlmCfg.BaseUrl, "/") + "/chat/completions"
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if vlmCfg.ApiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+vlmCfg.ApiKey)
+	}
+
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("VLM request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("VLM API returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse OpenAI-compatible response.
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("VLM returned empty choices")
+	}
+
+	return strings.TrimSpace(result.Choices[0].Message.Content), nil
+}
 // Used as a minimal fallback when knowledge base config is unavailable.
 func buildScreenshotReadRequest(screenshotBytes []byte) *proto.ReadFromFileRequest {
 	return &proto.ReadFromFileRequest{
