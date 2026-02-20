@@ -356,12 +356,10 @@ func (h *BrowserHandler) Capture(c *gin.Context) {
 		return
 	}
 
-	// Attach to the existing target without claiming ownership.
-	captureCtx, captureCancel := chromedp.NewContext(
-		sess.AllocCtx,
-		chromedp.WithTargetID(sess.TargetID),
-	)
-	defer captureCancel()
+	// Reuse the existing tab context for capture commands.
+	// Creating a new context with WithTargetID fails on Browserless because the
+	// remote allocator's new WebSocket session cannot see targets from an earlier session.
+	captureCtx := sess.TabCtx
 
 	var results []captureResultItem
 
