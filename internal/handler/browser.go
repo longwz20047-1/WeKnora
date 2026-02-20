@@ -561,9 +561,21 @@ func (h *BrowserHandler) captureScreenshotOCR(
 	logger.Infof(ctx, "captureScreenshotOCR: DocReader returned %d chunks", len(resp.GetChunks()))
 
 	// Collect text from returned chunks.
+	// For image files, DocReader puts the OCR result in Images[].OcrText,
+	// while Content is just a markdown image reference like ![name](url).
 	var sb strings.Builder
 	for _, chunk := range resp.GetChunks() {
-		sb.WriteString(chunk.GetContent())
+		var ocrParts []string
+		for _, img := range chunk.GetImages() {
+			if img.GetOcrText() != "" {
+				ocrParts = append(ocrParts, img.GetOcrText())
+			}
+		}
+		if len(ocrParts) > 0 {
+			sb.WriteString(strings.Join(ocrParts, "\n\n"))
+		} else {
+			sb.WriteString(chunk.GetContent())
+		}
 		sb.WriteString("\n\n")
 	}
 	text := strings.TrimSpace(sb.String())
