@@ -475,7 +475,7 @@ func (h *BrowserHandler) captureScreenshotOCR(
 
 	if err := chromedp.Run(captureCtx,
 		chromedp.Location(&currentURL),
-		chromedp.FullScreenshot(&screenshotBuf, 0), // quality=0 → lossless PNG
+		chromedp.FullScreenshot(&screenshotBuf, 85), // JPEG quality 85, full page
 	); err != nil {
 		logger.Errorf(ctx, "captureScreenshotOCR: chromedp run failed: %v", err)
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "截图失败: " + err.Error()}
@@ -520,8 +520,8 @@ func (h *BrowserHandler) captureScreenshotOCR(
 
 	resp, err := h.docReader.ReadFromFile(ctx, &proto.ReadFromFileRequest{
 		FileContent: screenshotBuf,
-		FileName:    "screenshot.png",
-		FileType:    "png",
+		FileName:    "screenshot.jpg",
+		FileType:    "jpg",
 		ReadConfig:  readCfg,
 	})
 	if err != nil {
@@ -610,8 +610,8 @@ func (h *BrowserHandler) resolveVLMConfig(ctx context.Context, kb *types.Knowled
 func buildScreenshotReadRequest(screenshotBytes []byte) *proto.ReadFromFileRequest {
 	return &proto.ReadFromFileRequest{
 		FileContent: screenshotBytes,
-		FileName:    "screenshot.png",
-		FileType:    "png",
+		FileName:    "screenshot.jpg",
+		FileType:    "jpg",
 		ReadConfig: &proto.ReadConfig{
 			ChunkSize:    500,
 			ChunkOverlap: 50,
