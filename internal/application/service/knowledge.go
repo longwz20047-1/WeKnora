@@ -7944,6 +7944,98 @@ func (s *knowledgeService) CreateKnowledgeFromExtracted(
 	return knowledge, nil
 }
 
+// CreateKnowledgeFromImageBytes creates a knowledge item from raw image bytes
+// (e.g., a browser screenshot). The image is saved to file storage and processed
+// through the same pipeline as direct image uploads (DocReader + PaddleOCR).
+func (s *knowledgeService) CreateKnowledgeFromImageBytes(
+	ctx context.Context,
+	kbID string, imageBytes []byte, fileName, tagID string,
+) (*types.Knowledge, error) {
+	logger.Infof(ctx, "CreateKnowledgeFromImageBytes: kbID=%s fileName=%s size=%d", kbID, fileName, len(imageBytes))
+
+	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+	fileType := getFileType(fileName)
+
+	// Calculate hash for deduplication.
+	h := md5.Sum(imageBytes)
+	hash := hex.EncodeToString(h[:])
+
+	knowledge := &types.Knowledge{
+		ID:               uuid.New().String(),
+		TenantID:         tenantID,
+		KnowledgeBaseID:  kbID,
+		TagID:            tagID,
+		Type:             "file",
+		Title:            fileName,
+		FileName:         fileName,
+		FileType:         fileType,
+		FileSize:         int64(len(imageBytes)),
+		FileHash:         hash,
+		ParseStatus:      "pending",
+		EnableStatus:     "disabled",
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+		EmbeddingModelID: kb.EmbeddingModelID,
+	}
+
+	if err := s.repo.CreateKnowledge(ctx, knowledge); err != nil {
+		return nil, err
+	}
+
+	// Save image bytes to file storage.
+	filePath, err := s.fileSvc.SaveBytes(ctx, imageBytes, tenantID, knowledge.ID+"."+fileType, false)
+	if err != nil {
+		logger.Errorf(ctx, "CreateKnowledgeFromImageBytes: save file failed: %v", err)
+		return nil, err
+	}
+	knowledge.FilePath = filePath
+	if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
+		return nil, err
+	}
+
+	// Enqueue document processing task (same as CreateKnowledgeFromFile).
+	enableQuestionGeneration := false
+	questionCount := 3
+	if kb.QuestionGenerationConfig != nil && kb.QuestionGenerationConfig.Enabled {
+		enableQuestionGeneration = true
+		if kb.QuestionGenerationConfig.QuestionCount > 0 {
+			questionCount = kb.QuestionGenerationConfig.QuestionCount
+		}
+	}
+
+	taskPayload := types.DocumentProcessPayload{
+		TenantID:                 tenantID,
+		KnowledgeID:              knowledge.ID,
+		KnowledgeBaseID:          kbID,
+		FilePath:                 filePath,
+		FileName:                 fileName,
+		FileType:                 fileType,
+		EnableMultimodel:         kb.IsMultimodalEnabled(),
+		EnableQuestionGeneration: enableQuestionGeneration,
+		QuestionCount:            questionCount,
+	}
+
+	payloadBytes, err := json.Marshal(taskPayload)
+	if err != nil {
+		logger.Errorf(ctx, "CreateKnowledgeFromImageBytes: marshal payload failed: %v", err)
+		return knowledge, nil
+	}
+
+	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	if info, enqErr := s.task.Enqueue(task); enqErr != nil {
+		logger.Errorf(ctx, "CreateKnowledgeFromImageBytes: enqueue failed: %v", enqErr)
+	} else {
+		logger.Infof(ctx, "CreateKnowledgeFromImageBytes: enqueued id=%s knowledge=%s", info.ID, knowledge.ID)
+	}
+
+	return knowledge, nil
+}
+
 // ReplaceKnowledgeContent clears all chunks for the given knowledge item and
 // re-queues it for processing with the supplied text content.
 func (s *knowledgeService) ReplaceKnowledgeContent(ctx context.Context, id, content string) error {

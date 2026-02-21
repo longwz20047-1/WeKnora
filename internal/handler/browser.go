@@ -4,12 +4,9 @@ package handler
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,10 +24,8 @@ import (
 	"github.com/google/uuid"
 
 	drclient "github.com/Tencent/WeKnora/docreader/client"
-	"github.com/Tencent/WeKnora/docreader/proto"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
-	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
 
@@ -395,8 +390,8 @@ func (h *BrowserHandler) Capture(c *gin.Context) {
 		results = append(results, result)
 	}
 
-	// ── Screenshot OCR via DocReader ──
-	if req.ScreenshotOCR && h.docReader != nil {
+	// ── Screenshot OCR ──
+	if req.ScreenshotOCR {
 		result := h.captureScreenshotOCR(ctx, captureCtx, req)
 		results = append(results, result)
 	}
@@ -473,8 +468,8 @@ func (h *BrowserHandler) captureText(
 	}
 }
 
-// captureScreenshotOCR takes a full-page screenshot, calls the VLM API directly
-// to extract visible text, and stores the result as knowledge.
+// captureScreenshotOCR takes a full-page screenshot, saves it as image knowledge,
+// and lets the existing processChunks pipeline handle OCR (PaddleOCR + VLM).
 func (h *BrowserHandler) captureScreenshotOCR(
 	ctx context.Context,
 	captureCtx context.Context,
@@ -493,7 +488,7 @@ func (h *BrowserHandler) captureScreenshotOCR(
 
 	logger.Infof(ctx, "captureScreenshotOCR: raw screenshot size=%d bytes, url=%s", len(screenshotBuf), currentURL)
 
-	// VLM APIs typically have image size limits. Compress if needed.
+	// Compress large screenshots so they stay within DocReader limits.
 	const maxImageBytes = 900 * 1024
 	if len(screenshotBuf) > maxImageBytes {
 		compressed, compErr := compressJPEG(screenshotBuf, maxImageBytes)
@@ -509,109 +504,26 @@ func (h *BrowserHandler) captureScreenshotOCR(
 		currentURL = req.CurrentURL
 	}
 
-	// Fetch knowledge base to get VLM config.
-	kb, kbErr := h.kbService.GetKnowledgeBaseByID(ctx, req.KnowledgeBaseID)
-	if kbErr != nil {
-		logger.Errorf(ctx, "captureScreenshotOCR: get KB %s failed: %v", req.KnowledgeBaseID, kbErr)
-		return captureResultItem{Method: "screenshot_ocr", Success: false,
-			Error: "无法获取知识库配置: " + kbErr.Error()}
-	}
+	// Build a descriptive file name.
+	fileName := fmt.Sprintf("screenshot_%s.jpg", time.Now().Format("20060102_150405"))
 
-	vlmCfg, vlmErr := h.resolveVLMConfig(ctx, kb)
-	if vlmErr != nil {
-		logger.Errorf(ctx, "captureScreenshotOCR: resolve VLM failed: %v", vlmErr)
-		return captureResultItem{Method: "screenshot_ocr", Success: false,
-			Error: "VLM 模型配置解析失败: " + vlmErr.Error()}
-	}
-	if vlmCfg == nil {
-		return captureResultItem{Method: "screenshot_ocr", Success: false,
-			Error: "该知识库未配置 VLM 模型，截图识别需要 VLM 支持。请在知识库设置中启用并选择 VLM 模型。"}
-	}
-
-	logger.Infof(ctx, "captureScreenshotOCR: calling VLM directly, model=%s, base_url=%s",
-		vlmCfg.ModelName, vlmCfg.BaseUrl)
-
-	// Call VLM API directly to extract text from screenshot.
-	text, ocrErr := callVLMForOCR(ctx, vlmCfg, screenshotBuf)
-	if ocrErr != nil {
-		logger.Errorf(ctx, "captureScreenshotOCR: VLM OCR failed: %v", ocrErr)
-		return captureResultItem{Method: "screenshot_ocr", Success: false,
-			Error: "截图识别失败: " + ocrErr.Error()}
-	}
-
-	logger.Infof(ctx, "captureScreenshotOCR: VLM returned %d chars", len(text))
-
-	if len(text) < 10 {
-		return captureResultItem{Method: "screenshot_ocr", Success: false,
-			Error: "截图识别结果为空或内容过少"}
-	}
-
-	title := req.Title
-	if title == "" {
-		title = currentURL
-	}
-
-	if req.ReplaceKnowledgeID != "" {
-		if replErr := h.kgService.ReplaceKnowledgeContent(ctx, req.ReplaceKnowledgeID, text); replErr != nil {
-			return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "替换内容失败: " + replErr.Error()}
-		}
-		return captureResultItem{
-			Method:      "screenshot_ocr",
-			Success:     true,
-			KnowledgeID: req.ReplaceKnowledgeID,
-			ContentLen:  len(text),
-			Message:     "内容已更新（OCR）",
-		}
-	}
-
-	kg, createErr := h.kgService.CreateKnowledgeFromExtracted(ctx, req.KnowledgeBaseID, title, text, req.TagID)
+	// Create image knowledge — uses the same pipeline as direct image uploads
+	// (DocReader parse → processChunks with PaddleOCR).
+	kg, createErr := h.kgService.CreateKnowledgeFromImageBytes(ctx, req.KnowledgeBaseID, screenshotBuf, fileName, req.TagID)
 	if createErr != nil {
+		logger.Errorf(ctx, "captureScreenshotOCR: CreateKnowledgeFromImageBytes failed: %v", createErr)
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "创建知识失败: " + createErr.Error()}
 	}
+
+	logger.Infof(ctx, "captureScreenshotOCR: created image knowledge id=%s, fileName=%s", kg.ID, fileName)
 
 	return captureResultItem{
 		Method:      "screenshot_ocr",
 		Success:     true,
 		KnowledgeID: kg.ID,
-		ContentLen:  len(text),
-		Message:     "截图 OCR 采集成功",
+		ContentLen:  len(screenshotBuf),
+		Message:     "截图已提交，OCR 正在后台处理",
 	}
-}
-
-// resolveVLMConfig converts KB VLM settings to proto format, supporting both
-// legacy (model_name+base_url) and new (model_id) configurations.
-func (h *BrowserHandler) resolveVLMConfig(ctx context.Context, kb *types.KnowledgeBase) (*proto.VLMConfig, error) {
-	// Legacy version: direct credentials in VLMConfig.
-	if kb.VLMConfig.ModelName != "" && kb.VLMConfig.BaseURL != "" {
-		return &proto.VLMConfig{
-			ModelName:     kb.VLMConfig.ModelName,
-			BaseUrl:       kb.VLMConfig.BaseURL,
-			ApiKey:        kb.VLMConfig.APIKey,
-			InterfaceType: kb.VLMConfig.InterfaceType,
-		}, nil
-	}
-
-	// New version: resolve model_id through ModelService.
-	if !kb.VLMConfig.Enabled || kb.VLMConfig.ModelID == "" {
-		return nil, nil
-	}
-
-	model, err := h.modelService.GetModelByID(ctx, kb.VLMConfig.ModelID)
-	if err != nil {
-		return nil, err
-	}
-
-	interfaceType := model.Parameters.InterfaceType
-	if interfaceType == "" {
-		interfaceType = "openai"
-	}
-
-	return &proto.VLMConfig{
-		ModelName:     model.Name,
-		BaseUrl:       model.Parameters.BaseURL,
-		ApiKey:        model.Parameters.APIKey,
-		InterfaceType: interfaceType,
-	}, nil
 }
 
 // compressJPEG re-encodes a JPEG image at progressively lower quality until it
@@ -650,99 +562,6 @@ func compressJPEG(data []byte, maxBytes int) ([]byte, error) {
 		return nil, fmt.Errorf("encode resized jpeg: %w", err)
 	}
 	return buf.Bytes(), nil
-}
-
-// callVLMForOCR sends a screenshot to the VLM API (OpenAI-compatible) and asks
-// it to extract all visible text from the image.
-func callVLMForOCR(ctx context.Context, vlmCfg *proto.VLMConfig, imgData []byte) (string, error) {
-	b64 := base64.StdEncoding.EncodeToString(imgData)
-	dataURI := "data:image/jpeg;base64," + b64
-
-	// Build OpenAI-compatible chat completion request with vision.
-	reqBody := map[string]interface{}{
-		"model": vlmCfg.ModelName,
-		"messages": []map[string]interface{}{
-			{
-				"role": "user",
-				"content": []map[string]interface{}{
-					{
-						"type": "text",
-						"text": "请详细提取这个网页截图中的所有可见文字内容。只需输出提取到的文字，不要加额外说明。保持原文的结构和层次。",
-					},
-					{
-						"type": "image_url",
-						"image_url": map[string]string{
-							"url": dataURI,
-						},
-					},
-				},
-			},
-		},
-		"max_tokens": 4096,
-		"temperature": 0.1,
-	}
-
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
-	}
-
-	apiURL := strings.TrimRight(vlmCfg.BaseUrl, "/") + "/chat/completions"
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if vlmCfg.ApiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+vlmCfg.ApiKey)
-	}
-
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("VLM request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("VLM API returned %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	// Parse OpenAI-compatible response.
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
-	}
-
-	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("VLM returned empty choices")
-	}
-
-	return strings.TrimSpace(result.Choices[0].Message.Content), nil
-}
-// Used as a minimal fallback when knowledge base config is unavailable.
-func buildScreenshotReadRequest(screenshotBytes []byte) *proto.ReadFromFileRequest {
-	return &proto.ReadFromFileRequest{
-		FileContent: screenshotBytes,
-		FileName:    "screenshot.jpg",
-		FileType:    "jpg",
-		ReadConfig: &proto.ReadConfig{
-			ChunkSize:    500,
-			ChunkOverlap: 50,
-		},
-	}
 }
 
 // ─── ScreenStream (SSE) ─────────────────────────────────────────────────────
