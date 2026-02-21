@@ -30,29 +30,45 @@ import (
 )
 
 // htmlToMarkdown converts an HTML string to Markdown using go-readability for content
-// extraction and html-to-markdown/v2 for conversion. Returns the markdown text,
-// the page title (empty if extraction fails), and any conversion error.
+// extraction and html-to-markdown/v2 for conversion. It tries both readability
+// (article extraction) and full-HTML conversion, returning whichever produces
+// more content. Returns the markdown text, the page title, and any error.
 func htmlToMarkdown(htmlContent string, pageURL string) (markdown string, title string, err error) {
 	parsedURL, _ := url.Parse(pageURL)
 
 	// Try readability for article extraction and title.
+	var readabilityMd string
 	article, readErr := readability.FromReader(strings.NewReader(htmlContent), parsedURL)
 	if readErr == nil {
 		title = article.Title
-	}
-
-	// Convert readability's article content to Markdown first.
-	if readErr == nil && article.Content != "" {
-		md, convErr := htmltomarkdown.ConvertString(article.Content, converter.WithDomain(pageURL))
-		if convErr == nil && len(md) >= 200 {
-			return md, title, nil
+		if article.Content != "" {
+			md, convErr := htmltomarkdown.ConvertString(article.Content, converter.WithDomain(pageURL))
+			if convErr == nil {
+				readabilityMd = strings.TrimSpace(md)
+			}
 		}
 	}
 
-	// Readability extracted too little (app pages, settings pages, etc.).
-	// Fall back to converting the full HTML.
-	markdown, err = htmltomarkdown.ConvertString(htmlContent, converter.WithDomain(pageURL))
-	return markdown, title, err
+	// Always try full-HTML conversion as well.
+	fullMd, fullErr := htmltomarkdown.ConvertString(htmlContent, converter.WithDomain(pageURL))
+	if fullErr == nil {
+		fullMd = strings.TrimSpace(fullMd)
+	}
+
+	// Pick the longer result — readability is cleaner for articles, but
+	// full-HTML captures far more on form/app/settings pages.
+	if len(readabilityMd) >= len(fullMd) && len(readabilityMd) > 0 {
+		return readabilityMd, title, nil
+	}
+	if len(fullMd) > 0 {
+		return fullMd, title, nil
+	}
+
+	// Both failed or empty.
+	if readErr != nil {
+		return "", title, readErr
+	}
+	return "", title, fullErr
 }
 
 // ─── Session store ────────────────────────────────────────────────────────────
