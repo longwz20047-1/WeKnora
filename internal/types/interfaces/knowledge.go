@@ -153,7 +153,7 @@ type KnowledgeService interface {
 	// CreateKnowledgeFromExtracted creates a knowledge entry from pre-extracted text content
 	// (e.g., text captured by browser). The content is stored as passages and processed
 	// through the normal chunking pipeline.
-	CreateKnowledgeFromExtracted(ctx context.Context, kbID, title, content, tagID string) (*types.Knowledge, error)
+	CreateKnowledgeFromExtracted(ctx context.Context, kbID, title, content, tagID, sourceURL string) (*types.Knowledge, error)
 	// CreateKnowledgeFromImageBytes creates a knowledge entry from raw image bytes
 	// (e.g., a browser screenshot). The image is saved to file storage and processed
 	// through the same pipeline as direct image uploads (DocReader + PaddleOCR).

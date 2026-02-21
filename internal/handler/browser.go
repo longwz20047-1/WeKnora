@@ -469,7 +469,7 @@ func (h *BrowserHandler) captureText(
 		}
 	}
 
-	kg, createErr := h.kgService.CreateKnowledgeFromExtracted(ctx, req.KnowledgeBaseID, title, md, req.TagID)
+	kg, createErr := h.kgService.CreateKnowledgeFromExtracted(ctx, req.KnowledgeBaseID, title, md, req.TagID, currentURL)
 	if createErr != nil {
 		logger.Errorf(ctx, "captureText: CreateKnowledgeFromExtracted failed: %v", createErr)
 		return captureResultItem{Method: "text", Success: false, Error: "创建知识失败: " + createErr.Error()}

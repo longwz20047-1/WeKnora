@@ -6770,26 +6770,10 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 			chunks = urlResp.Chunks
 		}
 	} else if len(payload.Passages) > 0 {
-		// 文本段落导入
-		chunks := make([]*proto.Chunk, 0, len(payload.Passages))
-		start, end := 0, 0
-		for i, p := range payload.Passages {
-			if p == "" {
-				continue
-			}
-			end += len([]rune(p))
-			chunk := &proto.Chunk{
-				Content: p,
-				Seq:     int32(i),
-				Start:   int32(start),
-				End:     int32(end),
-			}
-			start = end
-			chunks = append(chunks, chunk)
-		}
-		// 直接处理chunks，不需要调用docReader
-		s.processChunks(ctx, kb, knowledge, chunks)
-		return nil
+		// 文本段落导入：合并所有 passages 后按知识库分段配置进行切分
+		fullText := strings.Join(payload.Passages, "\n\n")
+		chunks = splitMarkdownIntoChunks(fullText,
+			kb.ChunkingConfig.ChunkSize, kb.ChunkingConfig.ChunkOverlap)
 	} else {
 		// 文件导入
 		fileReader, err := s.fileSvc.GetFile(ctx, payload.FilePath)
@@ -7880,7 +7864,7 @@ func (s *knowledgeService) ProcessKnowledgeListDelete(ctx context.Context, t *as
 // so the record is associated with the source page.
 func (s *knowledgeService) CreateKnowledgeFromExtracted(
 	ctx context.Context,
-	kbID, title, content, tagID string,
+	kbID, title, content, tagID, sourceURL string,
 ) (*types.Knowledge, error) {
 	logger.Infof(ctx, "CreateKnowledgeFromExtracted: kbID=%s title=%q len=%d", kbID, title, len(content))
 
@@ -7897,6 +7881,7 @@ func (s *knowledgeService) CreateKnowledgeFromExtracted(
 		KnowledgeBaseID:  kbID,
 		Type:             "url",
 		Title:            title,
+		Source:           sourceURL,
 		ParseStatus:      "pending",
 		EnableStatus:     "disabled",
 		TagID:            tagID,
