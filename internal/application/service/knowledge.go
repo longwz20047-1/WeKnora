@@ -8015,7 +8015,7 @@ func (s *knowledgeService) CreateKnowledgeFromImageBytes(
 		FilePath:                 filePath,
 		FileName:                 fileName,
 		FileType:                 fileType,
-		EnableMultimodel:         kb.IsMultimodalEnabled(),
+		EnableMultimodel:         true, // Screenshots always need image processing (PaddleOCR)
 		EnableQuestionGeneration: enableQuestionGeneration,
 		QuestionCount:            questionCount,
 	}
