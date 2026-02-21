@@ -525,7 +525,7 @@ func (h *BrowserHandler) captureScreenshotOCR(
 
 	// Create image knowledge — uses the same pipeline as direct image uploads
 	// (DocReader parse → processChunks with PaddleOCR).
-	kg, createErr := h.kgService.CreateKnowledgeFromImageBytes(ctx, req.KnowledgeBaseID, screenshotBuf, fileName, req.TagID)
+	kg, createErr := h.kgService.CreateKnowledgeFromImageBytes(ctx, req.KnowledgeBaseID, screenshotBuf, fileName, req.TagID, currentURL)
 	if createErr != nil {
 		logger.Errorf(ctx, "captureScreenshotOCR: CreateKnowledgeFromImageBytes failed: %v", createErr)
 		return captureResultItem{Method: "screenshot_ocr", Success: false, Error: "创建知识失败: " + createErr.Error()}

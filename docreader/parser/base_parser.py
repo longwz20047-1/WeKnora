@@ -237,7 +237,11 @@ class BaseParser(ABC):
             new_width = int(width * scale)
             new_height = int(height * scale)
             resized_image = image.resize((new_width, new_height))
-            logger.info(f"Resized to: {new_width}x{new_height}")
+            # PIL resize() drops format attr; preserve it so downstream
+            # encode (decode_image) keeps the original codec (e.g. JPEG)
+            # instead of falling back to lossless PNG which inflates size.
+            resized_image.format = image.format
+            logger.info(f"Resized to: {new_width}x{new_height}, format={image.format}")
             return resized_image
 
         logger.info(f"PIL image size is {width}x{height}, no resizing needed")
@@ -266,9 +270,9 @@ class BaseParser(ABC):
             # Perform OCR recognition
             loop = asyncio.get_event_loop()
             try:
-                # Add timeout mechanism to avoid infinite blocking (30 seconds timeout)
+                # Add timeout mechanism to avoid infinite blocking (120 seconds timeout)
                 ocr_task = loop.run_in_executor(None, self.perform_ocr, resized_image)
-                ocr_text = await asyncio.wait_for(ocr_task, timeout=30.0)
+                ocr_text = await asyncio.wait_for(ocr_task, timeout=120.0)
             except Exception as e:
                 logger.error(f"OCR processing error, skipping this image: {str(e)}")
                 ocr_text = ""

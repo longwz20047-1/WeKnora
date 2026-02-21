@@ -284,6 +284,11 @@ class Caption:
         """Call OpenAI-compatible API for image captioning."""
         logger.info(f"Calling OpenAI-compatible API with model: {self.model}")
 
+        # Detect MIME type from base64 header bytes
+        mime_type = "image/png"
+        if image_base64.startswith("/9j/"):
+            mime_type = "image/jpeg"
+
         # Construct user message with text prompt and base64 encoded image
         user_msg = UserMessage(
             role="user",
@@ -292,7 +297,7 @@ class Caption:
                 Content(
                     type="image_url",
                     image_url=ImageUrl(
-                        url="data:image/png;base64," + image_base64, detail="auto"
+                        url=f"data:{mime_type};base64," + image_base64, detail="auto"
                     ),
                 ),
             ],

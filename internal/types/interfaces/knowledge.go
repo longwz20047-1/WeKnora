@@ -157,7 +157,7 @@ type KnowledgeService interface {
 	// CreateKnowledgeFromImageBytes creates a knowledge entry from raw image bytes
 	// (e.g., a browser screenshot). The image is saved to file storage and processed
 	// through the same pipeline as direct image uploads (DocReader + PaddleOCR).
-	CreateKnowledgeFromImageBytes(ctx context.Context, kbID string, imageBytes []byte, fileName, tagID string) (*types.Knowledge, error)
+	CreateKnowledgeFromImageBytes(ctx context.Context, kbID string, imageBytes []byte, fileName, tagID, sourceURL string) (*types.Knowledge, error)
 	// ReplaceKnowledgeContent clears the existing chunks for a knowledge item and
 	// re-queues it for processing with new text content.
 	ReplaceKnowledgeContent(ctx context.Context, id, content string) error

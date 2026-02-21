@@ -7934,9 +7934,9 @@ func (s *knowledgeService) CreateKnowledgeFromExtracted(
 // through the same pipeline as direct image uploads (DocReader + PaddleOCR).
 func (s *knowledgeService) CreateKnowledgeFromImageBytes(
 	ctx context.Context,
-	kbID string, imageBytes []byte, fileName, tagID string,
+	kbID string, imageBytes []byte, fileName, tagID, sourceURL string,
 ) (*types.Knowledge, error) {
-	logger.Infof(ctx, "CreateKnowledgeFromImageBytes: kbID=%s fileName=%s size=%d", kbID, fileName, len(imageBytes))
+	logger.Infof(ctx, "CreateKnowledgeFromImageBytes: kbID=%s fileName=%s size=%d sourceURL=%s", kbID, fileName, len(imageBytes), sourceURL)
 
 	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, kbID)
 	if err != nil {
@@ -7950,17 +7950,24 @@ func (s *knowledgeService) CreateKnowledgeFromImageBytes(
 	h := md5.Sum(imageBytes)
 	hash := hex.EncodeToString(h[:])
 
+	// Use sourceURL as title when available, otherwise use fileName.
+	title := fileName
+	if sourceURL != "" {
+		title = sourceURL
+	}
+
 	knowledge := &types.Knowledge{
 		ID:               uuid.New().String(),
 		TenantID:         tenantID,
 		KnowledgeBaseID:  kbID,
 		TagID:            tagID,
 		Type:             "file",
-		Title:            fileName,
+		Title:            title,
 		FileName:         fileName,
 		FileType:         fileType,
 		FileSize:         int64(len(imageBytes)),
 		FileHash:         hash,
+		Source:           sourceURL,
 		ParseStatus:      "pending",
 		EnableStatus:     "disabled",
 		CreatedAt:        time.Now(),
