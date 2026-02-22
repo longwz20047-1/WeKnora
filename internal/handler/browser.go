@@ -906,11 +906,15 @@ func (h *BrowserHandler) SendInput(c *gin.Context) {
 			WithKey(ev.Key).
 			WithCode(ev.Code).
 			WithText(ev.Text).
+			WithWindowsVirtualKeyCode(keyToVirtualKeyCode(ev.Key)).
+			WithNativeVirtualKeyCode(keyToVirtualKeyCode(ev.Key)).
 			WithModifiers(input.Modifier(ev.Modifiers))
 	case "keyup":
 		action = input.DispatchKeyEvent(input.KeyUp).
 			WithKey(ev.Key).
 			WithCode(ev.Code).
+			WithWindowsVirtualKeyCode(keyToVirtualKeyCode(ev.Key)).
+			WithNativeVirtualKeyCode(keyToVirtualKeyCode(ev.Key)).
 			WithModifiers(input.Modifier(ev.Modifiers))
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的事件类型: " + ev.Type})
@@ -936,5 +940,65 @@ func mapMouseButton(btn string) input.MouseButton {
 		return input.Middle
 	default:
 		return input.None
+	}
+}
+
+// keyToVirtualKeyCode maps JavaScript key names to Windows virtual key codes.
+// CDP requires WindowsVirtualKeyCode for special keys (Backspace, Enter, etc.)
+// to be dispatched correctly in the browser.
+func keyToVirtualKeyCode(key string) int64 {
+	switch key {
+	case "Backspace":
+		return 8
+	case "Tab":
+		return 9
+	case "Enter":
+		return 13
+	case "Shift":
+		return 16
+	case "Control":
+		return 17
+	case "Alt":
+		return 18
+	case "Escape":
+		return 27
+	case " ":
+		return 32
+	case "PageUp":
+		return 33
+	case "PageDown":
+		return 34
+	case "End":
+		return 35
+	case "Home":
+		return 36
+	case "ArrowLeft":
+		return 37
+	case "ArrowUp":
+		return 38
+	case "ArrowRight":
+		return 39
+	case "ArrowDown":
+		return 40
+	case "Delete":
+		return 46
+	case "Meta":
+		return 91
+	default:
+		if len(key) == 1 {
+			r := rune(key[0])
+			// A-Z
+			if r >= 'a' && r <= 'z' {
+				return int64(r - 32)
+			}
+			if r >= 'A' && r <= 'Z' {
+				return int64(r)
+			}
+			// 0-9
+			if r >= '0' && r <= '9' {
+				return int64(r)
+			}
+		}
+		return 0
 	}
 }
