@@ -4,9 +4,12 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,6 +29,7 @@ import (
 	drclient "github.com/Tencent/WeKnora/docreader/client"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
 
@@ -350,6 +354,7 @@ type captureRequest struct {
 	CurrentURL         string `json:"current_url"`
 	ExtractText        bool   `json:"extract_text"`
 	ScreenshotOCR      bool   `json:"screenshot_ocr"`
+	ScreenshotVLM      bool   `json:"screenshot_vlm"`
 	ReplaceKnowledgeID string `json:"replace_knowledge_id"`
 }
 
@@ -412,8 +417,14 @@ func (h *BrowserHandler) Capture(c *gin.Context) {
 		results = append(results, result)
 	}
 
+	// ── Screenshot VLM (direct VLM API call, bypasses DocReader) ──
+	if req.ScreenshotVLM {
+		result := h.captureScreenshotVLM(ctx, captureCtx, req)
+		results = append(results, result)
+	}
+
 	if len(results) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "至少需要选择一种采集方式（extract_text 或 screenshot_ocr）"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "至少需要选择一种采集方式"})
 		return
 	}
 
@@ -543,6 +554,198 @@ func (h *BrowserHandler) captureScreenshotOCR(
 		ContentLen:  len(screenshotBuf),
 		Message:     "截图已提交，OCR 正在后台处理",
 	}
+}
+
+// captureScreenshotVLM takes a full-page screenshot, calls the VLM API directly
+// to extract visible text, and stores the result as knowledge.
+func (h *BrowserHandler) captureScreenshotVLM(
+	ctx context.Context,
+	captureCtx context.Context,
+	req captureRequest,
+) captureResultItem {
+	var screenshotBuf []byte
+	var currentURL string
+
+	if err := chromedp.Run(captureCtx,
+		chromedp.Location(&currentURL),
+		chromedp.FullScreenshot(&screenshotBuf, 50),
+	); err != nil {
+		logger.Errorf(ctx, "captureScreenshotVLM: chromedp run failed: %v", err)
+		return captureResultItem{Method: "screenshot_vlm", Success: false, Error: "截图失败: " + err.Error()}
+	}
+
+	logger.Infof(ctx, "captureScreenshotVLM: raw screenshot size=%d bytes, url=%s", len(screenshotBuf), currentURL)
+
+	// Compress large screenshots for VLM API.
+	const maxImageBytes = 900 * 1024
+	if len(screenshotBuf) > maxImageBytes {
+		compressed, compErr := compressJPEG(screenshotBuf, maxImageBytes)
+		if compErr != nil {
+			logger.Warnf(ctx, "captureScreenshotVLM: compress failed: %v, using original", compErr)
+		} else {
+			logger.Infof(ctx, "captureScreenshotVLM: compressed %d -> %d bytes", len(screenshotBuf), len(compressed))
+			screenshotBuf = compressed
+		}
+	}
+
+	if currentURL == "" {
+		currentURL = req.CurrentURL
+	}
+
+	// Resolve VLM config from knowledge base.
+	kb, kbErr := h.kbService.GetKnowledgeBaseByID(ctx, req.KnowledgeBaseID)
+	if kbErr != nil {
+		logger.Errorf(ctx, "captureScreenshotVLM: get KB %s failed: %v", req.KnowledgeBaseID, kbErr)
+		return captureResultItem{Method: "screenshot_vlm", Success: false,
+			Error: "无法获取知识库配置: " + kbErr.Error()}
+	}
+
+	vlmModelName, vlmBaseURL, vlmAPIKey, vlmErr := h.resolveVLMCredentials(ctx, kb)
+	if vlmErr != nil {
+		logger.Errorf(ctx, "captureScreenshotVLM: resolve VLM failed: %v", vlmErr)
+		return captureResultItem{Method: "screenshot_vlm", Success: false, Error: vlmErr.Error()}
+	}
+	if vlmModelName == "" {
+		return captureResultItem{Method: "screenshot_vlm", Success: false,
+			Error: "该知识库未配置 VLM 模型，截图识别(VLM)需要 VLM 支持。请在知识库设置中启用并选择 VLM 模型。"}
+	}
+
+	logger.Infof(ctx, "captureScreenshotVLM: calling VLM directly, model=%s, base_url=%s", vlmModelName, vlmBaseURL)
+
+	text, ocrErr := callVLMForOCR(ctx, vlmModelName, vlmBaseURL, vlmAPIKey, screenshotBuf)
+	if ocrErr != nil {
+		logger.Errorf(ctx, "captureScreenshotVLM: VLM OCR failed: %v", ocrErr)
+		return captureResultItem{Method: "screenshot_vlm", Success: false,
+			Error: "截图识别失败: " + ocrErr.Error()}
+	}
+
+	logger.Infof(ctx, "captureScreenshotVLM: VLM returned %d chars", len(text))
+
+	if len(text) < 10 {
+		return captureResultItem{Method: "screenshot_vlm", Success: false,
+			Error: "截图识别结果为空或内容过少"}
+	}
+
+	title := req.Title
+	if title == "" {
+		title = currentURL
+	}
+	if len(title) > 255 {
+		title = title[:255]
+	}
+
+	kg, createErr := h.kgService.CreateKnowledgeFromExtracted(ctx, req.KnowledgeBaseID, title, text, req.TagID, currentURL)
+	if createErr != nil {
+		logger.Errorf(ctx, "captureScreenshotVLM: CreateKnowledgeFromExtracted failed: %v", createErr)
+		return captureResultItem{Method: "screenshot_vlm", Success: false, Error: "创建知识失败: " + createErr.Error()}
+	}
+
+	return captureResultItem{
+		Method:      "screenshot_vlm",
+		Success:     true,
+		KnowledgeID: kg.ID,
+		ContentLen:  len(text),
+		Message:     "VLM 识别完成",
+	}
+}
+
+// resolveVLMCredentials extracts VLM model name, base URL and API key from a knowledge base config.
+func (h *BrowserHandler) resolveVLMCredentials(ctx context.Context, kb *types.KnowledgeBase) (modelName, baseURL, apiKey string, err error) {
+	// Legacy: direct credentials in VLMConfig.
+	if kb.VLMConfig.ModelName != "" && kb.VLMConfig.BaseURL != "" {
+		return kb.VLMConfig.ModelName, kb.VLMConfig.BaseURL, kb.VLMConfig.APIKey, nil
+	}
+
+	// New: resolve via ModelService.
+	if !kb.VLMConfig.Enabled || kb.VLMConfig.ModelID == "" {
+		return "", "", "", nil
+	}
+
+	model, err := h.modelService.GetModelByID(ctx, kb.VLMConfig.ModelID)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	return model.Name, model.Parameters.BaseURL, model.Parameters.APIKey, nil
+}
+
+// callVLMForOCR sends a screenshot to the VLM API (OpenAI-compatible) and asks
+// it to extract all visible text from the image.
+func callVLMForOCR(ctx context.Context, modelName, baseURL, apiKey string, imgData []byte) (string, error) {
+	b64 := base64.StdEncoding.EncodeToString(imgData)
+	dataURI := "data:image/jpeg;base64," + b64
+
+	reqBody := map[string]interface{}{
+		"model": modelName,
+		"messages": []map[string]interface{}{
+			{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": "请详细提取这个网页截图中的所有可见文字内容。只需输出提取到的文字，不要加额外说明。保持原文的结构和层次。",
+					},
+					{
+						"type": "image_url",
+						"image_url": map[string]string{
+							"url": dataURI,
+						},
+					},
+				},
+			},
+		},
+		"max_tokens":  4096,
+		"temperature": 0.1,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	apiURL := strings.TrimRight(baseURL, "/") + "/chat/completions"
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("VLM request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("VLM API returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("VLM returned empty choices")
+	}
+
+	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
 // compressJPEG re-encodes a JPEG image at progressively lower quality until it
