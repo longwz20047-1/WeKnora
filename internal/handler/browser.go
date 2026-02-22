@@ -556,8 +556,9 @@ func (h *BrowserHandler) captureScreenshotOCR(
 	}
 }
 
-// captureScreenshotVLM takes a full-page screenshot, calls the VLM API directly
-// to extract visible text, and stores the result as knowledge.
+// captureScreenshotVLM takes a full-page screenshot, then launches a background
+// goroutine to call the VLM API for text extraction and create knowledge.
+// Returns immediately so the user doesn't have to wait for VLM inference.
 func (h *BrowserHandler) captureScreenshotVLM(
 	ctx context.Context,
 	captureCtx context.Context,
@@ -592,7 +593,8 @@ func (h *BrowserHandler) captureScreenshotVLM(
 		currentURL = req.CurrentURL
 	}
 
-	// Resolve VLM config from knowledge base.
+	// Resolve VLM config from knowledge base (must be done before goroutine
+	// because ctx carries tenant info needed for model lookup).
 	kb, kbErr := h.kbService.GetKnowledgeBaseByID(ctx, req.KnowledgeBaseID)
 	if kbErr != nil {
 		logger.Errorf(ctx, "captureScreenshotVLM: get KB %s failed: %v", req.KnowledgeBaseID, kbErr)
@@ -610,22 +612,6 @@ func (h *BrowserHandler) captureScreenshotVLM(
 			Error: "该知识库未配置 VLM 模型，截图识别(VLM)需要 VLM 支持。请在知识库设置中启用并选择 VLM 模型。"}
 	}
 
-	logger.Infof(ctx, "captureScreenshotVLM: calling VLM directly, model=%s, base_url=%s", vlmModelName, vlmBaseURL)
-
-	text, ocrErr := callVLMForOCR(ctx, vlmModelName, vlmBaseURL, vlmAPIKey, screenshotBuf)
-	if ocrErr != nil {
-		logger.Errorf(ctx, "captureScreenshotVLM: VLM OCR failed: %v", ocrErr)
-		return captureResultItem{Method: "screenshot_vlm", Success: false,
-			Error: "截图识别失败: " + ocrErr.Error()}
-	}
-
-	logger.Infof(ctx, "captureScreenshotVLM: VLM returned %d chars", len(text))
-
-	if len(text) < 10 {
-		return captureResultItem{Method: "screenshot_vlm", Success: false,
-			Error: "截图识别结果为空或内容过少"}
-	}
-
 	title := req.Title
 	if title == "" {
 		title = currentURL
@@ -634,18 +620,47 @@ func (h *BrowserHandler) captureScreenshotVLM(
 		title = title[:255]
 	}
 
-	kg, createErr := h.kgService.CreateKnowledgeFromExtracted(ctx, req.KnowledgeBaseID, title, text, req.TagID, currentURL)
+	// Create a pending knowledge record immediately so it shows up in the UI.
+	// Pass empty content — CreateKnowledgeFromExtracted will create the DB record
+	// and skip meaningful processing for empty passages.
+	kg, createErr := h.kgService.CreateKnowledgeFromExtracted(ctx, req.KnowledgeBaseID, title, "", req.TagID, currentURL)
 	if createErr != nil {
-		logger.Errorf(ctx, "captureScreenshotVLM: CreateKnowledgeFromExtracted failed: %v", createErr)
+		logger.Errorf(ctx, "captureScreenshotVLM: CreateKnowledgeFromExtracted (pending) failed: %v", createErr)
 		return captureResultItem{Method: "screenshot_vlm", Success: false, Error: "创建知识失败: " + createErr.Error()}
 	}
+
+	logger.Infof(ctx, "captureScreenshotVLM: created pending knowledge id=%s, launching background VLM", kg.ID)
+
+	// Run VLM call in background goroutine.
+	go func() {
+		bgCtx := context.WithoutCancel(ctx)
+		bgCtx, cancel := context.WithTimeout(bgCtx, 3*time.Minute)
+		defer cancel()
+
+		text, ocrErr := callVLMForOCR(bgCtx, vlmModelName, vlmBaseURL, vlmAPIKey, screenshotBuf)
+		if ocrErr != nil {
+			logger.Errorf(bgCtx, "captureScreenshotVLM[bg]: VLM OCR failed for knowledge %s: %v", kg.ID, ocrErr)
+			return
+		}
+
+		logger.Infof(bgCtx, "captureScreenshotVLM[bg]: VLM returned %d chars for knowledge %s", len(text), kg.ID)
+
+		if len(text) < 10 {
+			logger.Warnf(bgCtx, "captureScreenshotVLM[bg]: VLM result too short (%d chars) for knowledge %s", len(text), kg.ID)
+			return
+		}
+
+		// Replace the empty content with VLM-extracted text and enqueue processing.
+		if err := h.kgService.ReplaceKnowledgeContent(bgCtx, kg.ID, text); err != nil {
+			logger.Errorf(bgCtx, "captureScreenshotVLM[bg]: ReplaceKnowledgeContent failed for knowledge %s: %v", kg.ID, err)
+		}
+	}()
 
 	return captureResultItem{
 		Method:      "screenshot_vlm",
 		Success:     true,
 		KnowledgeID: kg.ID,
-		ContentLen:  len(text),
-		Message:     "VLM 识别完成",
+		Message:     "VLM 识别正在后台处理",
 	}
 }
 

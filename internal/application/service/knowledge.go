@@ -7894,6 +7894,13 @@ func (s *knowledgeService) CreateKnowledgeFromExtracted(
 		return nil, err
 	}
 
+	// Skip enqueuing when content is empty (e.g., VLM screenshot capture
+	// creates a pending record first and fills content later via ReplaceKnowledgeContent).
+	if content == "" {
+		logger.Infof(ctx, "CreateKnowledgeFromExtracted: empty content, skipping enqueue for knowledge=%s", knowledge.ID)
+		return knowledge, nil
+	}
+
 	enableQuestionGeneration := false
 	questionCount := 3
 	if kb.QuestionGenerationConfig != nil && kb.QuestionGenerationConfig.Enabled {
