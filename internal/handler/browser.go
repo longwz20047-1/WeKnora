@@ -454,6 +454,9 @@ func (h *BrowserHandler) captureText(
 	if title == "" {
 		title = currentURL
 	}
+	if len(title) > 255 {
+		title = title[:255]
+	}
 
 	if req.ReplaceKnowledgeID != "" {
 		if replErr := h.kgService.ReplaceKnowledgeContent(ctx, req.ReplaceKnowledgeID, md); replErr != nil {

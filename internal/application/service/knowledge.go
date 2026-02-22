@@ -7955,6 +7955,9 @@ func (s *knowledgeService) CreateKnowledgeFromImageBytes(
 	if sourceURL != "" {
 		title = sourceURL
 	}
+	if len(title) > 255 {
+		title = title[:255]
+	}
 
 	knowledge := &types.Knowledge{
 		ID:               uuid.New().String(),
