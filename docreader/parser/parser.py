@@ -10,6 +10,7 @@ from docreader.parser.doc_parser import DocParser
 from docreader.parser.docx2_parser import Docx2Parser
 from docreader.parser.excel_parser import ExcelParser
 from docreader.parser.image_parser import ImageParser
+from docreader.parser.libreoffice_parser import LibreOfficeParser
 from docreader.parser.markdown_parser import MarkdownParser
 from docreader.parser.pdf_parser import PDFParser
 from docreader.parser.text_parser import TextParser
@@ -47,6 +48,31 @@ class Parser:
             "csv": CSVParser,
             "xlsx": ExcelParser,
             "xls": ExcelParser,
+            # LibreOffice convert-to-PDF formats
+            "pptx": LibreOfficeParser,
+            "ppt": LibreOfficeParser,
+            "pptm": LibreOfficeParser,
+            "potx": LibreOfficeParser,
+            "potm": LibreOfficeParser,
+            "rtf": LibreOfficeParser,
+            "odt": LibreOfficeParser,
+            "ods": LibreOfficeParser,
+            "odp": LibreOfficeParser,
+            "wps": LibreOfficeParser,
+            "docm": LibreOfficeParser,
+            "dotx": LibreOfficeParser,
+            "dotm": LibreOfficeParser,
+            "xlsm": LibreOfficeParser,
+            "xltx": LibreOfficeParser,
+            "xltm": LibreOfficeParser,
+            "pages": LibreOfficeParser,
+            "numbers": LibreOfficeParser,
+            "key": LibreOfficeParser,
+            "vsdx": LibreOfficeParser,
+            "vsd": LibreOfficeParser,
+            "pub": LibreOfficeParser,
+            "hwp": LibreOfficeParser,
+            "hwpx": LibreOfficeParser,
         }
         logger.info(
             "Parser initialized with %d parsers: %s",
