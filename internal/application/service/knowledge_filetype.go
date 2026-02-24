@@ -34,6 +34,8 @@ var fullParseTypes = map[string]bool{
 	"csv": true, "xlsx": true, "xls": true,
 	"jpg": true, "jpeg": true, "png": true, "gif": true,
 	"bmp": true, "tiff": true, "webp": true,
+	// Email/Note/Archive formats
+	"eml": true, "msg": true, "enex": true, "mht": true, "mhtml": true,
 }
 
 // convertParseTypes need conversion (e.g. Calibre) before parsing.
