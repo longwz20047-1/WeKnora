@@ -207,6 +207,12 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		return nil, ErrInvalidFileType
 	}
 
+	// Validate file size based on file type strategy
+	if err := validateFileSize(getFileType(fileName), file.Size); err != nil {
+		logger.Errorf(ctx, "File size validation failed: %v", err)
+		return nil, err
+	}
+
 	// Calculate file hash for deduplication
 	logger.Info(ctx, "Calculating file hash")
 	hash, err := calculateFileHash(file)
@@ -333,6 +339,15 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		EnableMultimodel:         enableMultimodelValue,
 		EnableQuestionGeneration: enableQuestionGeneration,
 		QuestionCount:            questionCount,
+	}
+
+	// Strategy-based routing: override the task payload FileType for text_as_is
+	// types so DocReader uses TextParser.  The Knowledge record keeps the
+	// original extension (e.g. "py") for frontend syntax highlighting.
+	fileType := getFileType(safeFilename)
+	strategy := getFileProcessStrategy(fileType)
+	if strategy == FileProcessTextAsIs {
+		taskPayload.FileType = "txt"
 	}
 
 	payloadBytes, err := json.Marshal(taskPayload)
@@ -2343,6 +2358,14 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 			QuestionCount:            questionCount,
 		}
 
+		// Strategy-based routing for reparse: override FileType for text_as_is
+		// types so DocReader uses TextParser.
+		reparseFileType := getFileType(existing.FileName)
+		reparseStrategy := getFileProcessStrategy(reparseFileType)
+		if reparseStrategy == FileProcessTextAsIs {
+			taskPayload.FileType = "txt"
+		}
+
 		payloadBytes, err := json.Marshal(taskPayload)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to marshal reparse task payload: %v", err)
@@ -2412,23 +2435,16 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 	return existing, nil
 }
 
-// isValidFileType checks if a file type is supported
+// isValidFileType checks if a file type is supported.
+// Delegates to isValidFileTypeNew which covers all four processing strategies.
 func isValidFileType(filename string) bool {
-	switch strings.ToLower(getFileType(filename)) {
-	case "pdf", "txt", "docx", "doc", "md", "markdown", "png", "jpg", "jpeg", "gif", "csv", "xlsx", "xls":
-		return true
-	default:
-		return false
-	}
+	return isValidFileTypeNew(filename)
 }
 
-// getFileType extracts the file extension from a filename
+// getFileType extracts the file extension from a filename.
+// Delegates to getFileTypeNew which handles special filenames and dotfiles.
 func getFileType(filename string) string {
-	ext := strings.Split(filename, ".")
-	if len(ext) < 2 {
-		return "unknown"
-	}
-	return ext[len(ext)-1]
+	return getFileTypeNew(filename)
 }
 
 // isValidURL verifies if a URL is valid
