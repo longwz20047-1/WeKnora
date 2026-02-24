@@ -93,6 +93,7 @@ if __name__ == "__main__":
                 "docreader/parser/tests/test_msg_parser.py",
                 "docreader/parser/tests/test_enex_parser.py",
                 "docreader/parser/tests/test_mhtml_parser.py",
+                "docreader/parser/tests/test_jupyter_parser.py",
             ]
             + sys.argv[1:]
         )

@@ -15,6 +15,7 @@ from docreader.parser.epub_parser import EpubParser
 from docreader.parser.excel_parser import ExcelParser
 from docreader.parser.fb2_parser import Fb2Parser
 from docreader.parser.image_parser import ImageParser
+from docreader.parser.jupyter_parser import JupyterParser
 from docreader.parser.libreoffice_parser import LibreOfficeParser
 from docreader.parser.markdown_parser import MarkdownParser
 from docreader.parser.mhtml_parser import MhtmlParser
@@ -93,6 +94,8 @@ class Parser:
             # Web archive formats
             "mht": MhtmlParser,
             "mhtml": MhtmlParser,
+            # Jupyter Notebook
+            "ipynb": JupyterParser,
         }
         logger.info(
             "Parser initialized with %d parsers: %s",
