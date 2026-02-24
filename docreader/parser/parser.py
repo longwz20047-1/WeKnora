@@ -5,10 +5,13 @@ from docreader.config import CONFIG
 from docreader.models.document import Document
 from docreader.models.read_config import ChunkingConfig
 from docreader.parser.base_parser import BaseParser
+from docreader.parser.chm_parser import ChmParser
 from docreader.parser.csv_parser import CSVParser
 from docreader.parser.doc_parser import DocParser
 from docreader.parser.docx2_parser import Docx2Parser
+from docreader.parser.epub_parser import EpubParser
 from docreader.parser.excel_parser import ExcelParser
+from docreader.parser.fb2_parser import Fb2Parser
 from docreader.parser.image_parser import ImageParser
 from docreader.parser.libreoffice_parser import LibreOfficeParser
 from docreader.parser.markdown_parser import MarkdownParser
@@ -73,6 +76,11 @@ class Parser:
             "pub": LibreOfficeParser,
             "hwp": LibreOfficeParser,
             "hwpx": LibreOfficeParser,
+            # Ebook formats
+            "epub": EpubParser,
+            "fb2": Fb2Parser,
+            # CHM help files
+            "chm": ChmParser,
         }
         logger.info(
             "Parser initialized with %d parsers: %s",
