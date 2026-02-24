@@ -7,7 +7,7 @@ requires-python = ">=3.10.18"
 dependencies = [
     "antiword>=0.1.0",
     "asyncio>=4.0.0",
-    "beautifulsoup4>=4.14.2",
+    "beautifulsoup4>=4.12.0",
     "cos-python-sdk-v5>=1.9.38",
     "goose3[all]>=3.1.20",
     "grpcio>=1.76.0",
