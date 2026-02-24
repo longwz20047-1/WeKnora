@@ -86,6 +86,7 @@ if __name__ == "__main__":
                 "--noconftest",  # skip conftest.py to avoid package __init__ imports
                 "--import-mode=importlib",
                 "docreader/parser/tests/test_libreoffice_parser.py",
+                "docreader/parser/tests/test_ebook_parser.py",
                 "docreader/parser/tests/test_epub_parser.py",
                 "docreader/parser/tests/test_chm_parser.py",
                 "docreader/parser/tests/test_fb2_parser.py",

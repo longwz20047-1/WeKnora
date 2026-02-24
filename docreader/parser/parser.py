@@ -9,6 +9,7 @@ from docreader.parser.chm_parser import ChmParser
 from docreader.parser.csv_parser import CSVParser
 from docreader.parser.doc_parser import DocParser
 from docreader.parser.docx2_parser import Docx2Parser
+from docreader.parser.ebook_parser import EbookParser
 from docreader.parser.eml_parser import EmlParser
 from docreader.parser.enex_parser import EnexParser
 from docreader.parser.epub_parser import EpubParser
@@ -84,6 +85,11 @@ class Parser:
             # Ebook formats
             "epub": EpubParser,
             "fb2": Fb2Parser,
+            # Ebook formats (calibre)
+            "azw3": EbookParser,
+            "azw": EbookParser,
+            "prc": EbookParser,
+            "mobi": EbookParser,
             # CHM help files
             "chm": ChmParser,
             # Email formats
