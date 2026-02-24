@@ -670,11 +670,12 @@ func (h *KnowledgeHandler) DeleteKnowledge(c *gin.Context) {
 
 // DownloadKnowledgeFile godoc
 // @Summary      下载知识文件
-// @Description  下载知识条目关联的原始文件
+// @Description  下载知识条目关联的原始文件。支持 format=pdf 参数下载 PDF 预览副本
 // @Tags         知识管理
 // @Accept       json
 // @Produce      application/octet-stream
-// @Param        id   path      string  true  "知识ID"
+// @Param        id     path      string  true   "知识ID"
+// @Param        format query     string  false  "文件格式 (pdf: 下载PDF预览副本)"
 // @Success      200  {file}    file    "文件内容"
 // @Failure      400  {object}  errors.AppError  "请求参数错误"
 // @Security     Bearer
@@ -697,28 +698,50 @@ func (h *KnowledgeHandler) DownloadKnowledgeFile(c *gin.Context) {
 		c.Error(err)
 		return
 	}
-	logger.Infof(ctx, "Retrieving knowledge file, ID: %s", secutils.SanitizeForLog(id))
 
-	file, filename, err := h.kgService.GetKnowledgeFile(effCtx, id)
-	if err != nil {
-		logger.ErrorWithFields(ctx, err, nil)
-		c.Error(errors.NewInternalServerError("Failed to retrieve file").WithDetails(err.Error()))
-		return
+	format := c.Query("format")
+
+	var file io.ReadCloser
+	var filename string
+
+	if format == "pdf" {
+		// Download the PDF preview copy
+		logger.Infof(ctx, "Retrieving PDF preview for knowledge, ID: %s", secutils.SanitizeForLog(id))
+		file, filename, err = h.kgService.GetKnowledgePDFPreview(effCtx, id)
+		if err != nil {
+			logger.ErrorWithFields(ctx, err, nil)
+			c.Error(errors.NewNotFoundError("PDF preview not available").WithDetails(err.Error()))
+			return
+		}
+	} else {
+		// Download the original file
+		logger.Infof(ctx, "Retrieving knowledge file, ID: %s", secutils.SanitizeForLog(id))
+		file, filename, err = h.kgService.GetKnowledgeFile(effCtx, id)
+		if err != nil {
+			logger.ErrorWithFields(ctx, err, nil)
+			c.Error(errors.NewInternalServerError("Failed to retrieve file").WithDetails(err.Error()))
+			return
+		}
 	}
 	defer file.Close()
 
 	logger.Infof(
 		ctx,
-		"Knowledge file retrieved successfully, ID: %s, filename: %s",
+		"Knowledge file retrieved successfully, ID: %s, filename: %s, format: %s",
 		secutils.SanitizeForLog(id),
 		secutils.SanitizeForLog(filename),
+		format,
 	)
 
 	// Set response headers for file download
 	c.Header("Content-Description", "File Transfer")
 	c.Header("Content-Transfer-Encoding", "binary")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
-	c.Header("Content-Type", "application/octet-stream")
+	if format == "pdf" {
+		c.Header("Content-Type", "application/pdf")
+	} else {
+		c.Header("Content-Type", "application/octet-stream")
+	}
 	c.Header("Expires", "0")
 	c.Header("Cache-Control", "must-revalidate")
 	c.Header("Pragma", "public")

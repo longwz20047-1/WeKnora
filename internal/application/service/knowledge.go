@@ -2149,6 +2149,42 @@ func (s *knowledgeService) GetKnowledgeFile(ctx context.Context, id string) (io.
 	return file, knowledge.FileName, nil
 }
 
+// GetKnowledgePDFPreview retrieves the PDF preview file for a knowledge entry.
+// The PDF preview path is stored in knowledge.Metadata["pdf_preview_path"] after DocReader conversion.
+func (s *knowledgeService) GetKnowledgePDFPreview(ctx context.Context, id string) (io.ReadCloser, string, error) {
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+	knowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, id)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Extract pdf_preview_path from metadata
+	metadataMap, err := knowledge.Metadata.Map()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to parse knowledge metadata: %w", err)
+	}
+
+	pdfPath, ok := metadataMap["pdf_preview_path"]
+	if !ok || pdfPath == nil || pdfPath == "" {
+		return nil, "", fmt.Errorf("no PDF preview available for this knowledge")
+	}
+
+	pdfPathStr, ok := pdfPath.(string)
+	if !ok || pdfPathStr == "" {
+		return nil, "", fmt.Errorf("invalid pdf_preview_path in metadata")
+	}
+
+	// Get the PDF file from storage
+	file, err := s.fileSvc.GetFile(ctx, pdfPathStr)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get PDF preview file: %w", err)
+	}
+
+	// Generate a filename based on the original filename
+	pdfFilename := strings.TrimSuffix(knowledge.FileName, "."+knowledge.FileType) + ".pdf"
+	return file, pdfFilename, nil
+}
+
 func (s *knowledgeService) UpdateKnowledge(ctx context.Context, knowledge *types.Knowledge) error {
 	record, err := s.repo.GetKnowledgeByID(ctx, ctx.Value(types.TenantIDContextKey).(uint64), knowledge.ID)
 	if err != nil {
@@ -6856,6 +6892,28 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 			return fmt.Errorf("failed to read file from docreader: %w", err)
 		}
 		chunks = fileResp.Chunks
+
+		// Extract pdf_preview_path from DocReader response metadata and save to Knowledge
+		if fileResp.Metadata != nil {
+			if pdfPath, ok := fileResp.Metadata["pdf_preview_path"]; ok && pdfPath != "" {
+				logger.Infof(ctx, "DocReader returned pdf_preview_path: %s for knowledge: %s", pdfPath, knowledge.ID)
+				// Merge pdf_preview_path into existing Knowledge metadata
+				metadataMap := make(map[string]interface{})
+				if len(knowledge.Metadata) > 0 {
+					if existing, err := knowledge.Metadata.Map(); err == nil {
+						metadataMap = existing
+					}
+				}
+				metadataMap["pdf_preview_path"] = pdfPath
+				if metadataBytes, err := json.Marshal(metadataMap); err == nil {
+					knowledge.Metadata = types.JSON(metadataBytes)
+					knowledge.UpdatedAt = time.Now()
+					if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
+						logger.Warnf(ctx, "Failed to save pdf_preview_path to knowledge metadata: %v", err)
+					}
+				}
+			}
+		}
 	}
 
 	// 处理chunks（这会更新状态为completed）

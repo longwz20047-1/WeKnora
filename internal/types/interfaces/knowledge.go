@@ -70,6 +70,9 @@ type KnowledgeService interface {
 	DeleteKnowledgeList(ctx context.Context, ids []string) error
 	// GetKnowledgeFile retrieves the file associated with the knowledge.
 	GetKnowledgeFile(ctx context.Context, id string) (io.ReadCloser, string, error)
+	// GetKnowledgePDFPreview retrieves the PDF preview file for a knowledge entry.
+	// Returns the PDF file reader, the filename, and any error.
+	GetKnowledgePDFPreview(ctx context.Context, id string) (io.ReadCloser, string, error)
 	// UpdateKnowledge updates knowledge information.
 	UpdateKnowledge(ctx context.Context, knowledge *types.Knowledge) error
 	// UpdateManualKnowledge updates manual Markdown knowledge content.
