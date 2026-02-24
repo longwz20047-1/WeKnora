@@ -346,6 +346,17 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	// types so DocReader uses TextParser.  The Knowledge record keeps the
 	// original extension (e.g. "py") for frontend syntax highlighting.
 	strategy := getFileProcessStrategy(fileType)
+
+	// store_preview files (STL, OBJ, FBX, etc.) cannot be text-extracted.
+	// Build a metadata-only chunk and embed it asynchronously instead of
+	// calling DocReader.
+	if strategy == FileProcessStorePreview {
+		metaText := buildMetadataChunk(knowledge, safeFilename)
+		go s.processMetadataOnlyChunks(context.Background(), kb, knowledge, metaText)
+		logger.Infof(ctx, "store_preview: launched async metadata embedding for knowledge %s", knowledge.ID)
+		return knowledge, nil
+	}
+
 	if strategy == FileProcessTextAsIs {
 		taskPayload.FileType = "txt"
 	}
@@ -1531,6 +1542,159 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 	logger.GetLogger(ctx).Infof("processChunks successfully")
 }
 
+// ---------------------------------------------------------------------------
+// store_preview helpers: metadata-only chunk building + async embedding
+// ---------------------------------------------------------------------------
+
+// buildMetadataChunk builds a descriptive text chunk from file metadata.
+// This text will be embedded for vector search so that store_preview files
+// (STL, OBJ, FBX, etc.) are discoverable even though they cannot be text-
+// extracted.
+func buildMetadataChunk(knowledge *types.Knowledge, filename string) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+	var sizeStr string
+	switch {
+	case knowledge.FileSize < KB:
+		sizeStr = fmt.Sprintf("%d B", knowledge.FileSize)
+	case knowledge.FileSize < MB:
+		sizeStr = fmt.Sprintf("%.2f KB", float64(knowledge.FileSize)/float64(KB))
+	case knowledge.FileSize < GB:
+		sizeStr = fmt.Sprintf("%.2f MB", float64(knowledge.FileSize)/float64(MB))
+	default:
+		sizeStr = fmt.Sprintf("%.2f GB", float64(knowledge.FileSize)/float64(GB))
+	}
+
+	return fmt.Sprintf(
+		"文件名: %s\n文件类型: %s\n文件大小: %s\n上传时间: %s",
+		filename,
+		knowledge.FileType,
+		sizeStr,
+		knowledge.CreatedAt.Format("2006-01-02 15:04:05"),
+	)
+}
+
+// processMetadataOnlyChunks runs in a goroutine to create a single metadata
+// chunk, embed it, and mark the knowledge as completed.  This is used for
+// store_preview file types that cannot be parsed by DocReader.
+func (s *knowledgeService) processMetadataOnlyChunks(
+	ctx context.Context,
+	kb *types.KnowledgeBase,
+	knowledge *types.Knowledge,
+	metadataText string,
+) {
+	// Helper to mark knowledge as failed.
+	markFailed := func(reason string) {
+		knowledge.ParseStatus = types.ParseStatusFailed
+		knowledge.ErrorMessage = reason
+		knowledge.UpdatedAt = time.Now()
+		if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
+			logger.Errorf(ctx, "processMetadataOnlyChunks: failed to update knowledge status to failed: %v", err)
+		}
+	}
+
+	// Set TenantID in context (needed by various repo calls).
+	ctx = context.WithValue(ctx, types.TenantIDContextKey, knowledge.TenantID)
+
+	// Fetch tenant info (needed for retrieve engine and storage quota).
+	tenantInfo, err := s.tenantRepo.GetTenantByID(ctx, knowledge.TenantID)
+	if err != nil {
+		logger.Errorf(ctx, "processMetadataOnlyChunks: failed to get tenant: %v", err)
+		markFailed(fmt.Sprintf("failed to get tenant: %v", err))
+		return
+	}
+	ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenantInfo)
+
+	// Mark as processing.
+	knowledge.ParseStatus = types.ParseStatusProcessing
+	knowledge.UpdatedAt = time.Now()
+	if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
+		logger.Errorf(ctx, "processMetadataOnlyChunks: failed to set processing status: %v", err)
+		return
+	}
+
+	// 1. Get embedding model.
+	embeddingModel, err := s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
+	if err != nil {
+		logger.Errorf(ctx, "processMetadataOnlyChunks: failed to get embedding model: %v", err)
+		markFailed(fmt.Sprintf("failed to get embedding model: %v", err))
+		return
+	}
+
+	// 2. Create the single metadata chunk.
+	chunkID := uuid.New().String()
+	chunk := &types.Chunk{
+		ID:              chunkID,
+		TenantID:        knowledge.TenantID,
+		KnowledgeID:     knowledge.ID,
+		KnowledgeBaseID: knowledge.KnowledgeBaseID,
+		Content:         metadataText,
+		ChunkIndex:      0,
+		IsEnabled:       true,
+		ChunkType:       types.ChunkTypeText,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+
+	if err := s.chunkService.CreateChunks(ctx, []*types.Chunk{chunk}); err != nil {
+		logger.Errorf(ctx, "processMetadataOnlyChunks: failed to create chunk: %v", err)
+		markFailed(fmt.Sprintf("failed to create chunk: %v", err))
+		return
+	}
+
+	// 3. Build index info and generate embedding.
+	indexInfoList := []*types.IndexInfo{
+		{
+			Content:         metadataText,
+			SourceID:        chunkID,
+			SourceType:      types.ChunkSourceType,
+			ChunkID:         chunkID,
+			KnowledgeID:     knowledge.ID,
+			KnowledgeBaseID: knowledge.KnowledgeBaseID,
+		},
+	}
+
+	retrieveEngine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
+	if err != nil {
+		logger.Errorf(ctx, "processMetadataOnlyChunks: failed to create retrieve engine: %v", err)
+		markFailed(fmt.Sprintf("failed to create retrieve engine: %v", err))
+		return
+	}
+
+	if err := retrieveEngine.BatchIndex(ctx, embeddingModel, indexInfoList); err != nil {
+		logger.Errorf(ctx, "processMetadataOnlyChunks: embedding failed: %v", err)
+		// Clean up the chunk we just created.
+		if delErr := s.chunkService.DeleteChunksByKnowledgeID(ctx, knowledge.ID); delErr != nil {
+			logger.Warnf(ctx, "processMetadataOnlyChunks: failed to clean up chunk after embedding failure: %v", delErr)
+		}
+		markFailed(fmt.Sprintf("embedding failed: %v", err))
+		return
+	}
+
+	// 4. Mark knowledge as completed.
+	knowledge.ParseStatus = types.ParseStatusCompleted
+	knowledge.EnableStatus = "enabled"
+	knowledge.SummaryStatus = types.SummaryStatusNone
+	knowledge.StorageSize = retrieveEngine.EstimateStorageSize(ctx, embeddingModel, indexInfoList)
+	now := time.Now()
+	knowledge.ProcessedAt = &now
+	knowledge.UpdatedAt = now
+	if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
+		logger.Errorf(ctx, "processMetadataOnlyChunks: failed to mark knowledge as completed: %v", err)
+		return
+	}
+
+	// Update tenant's storage usage.
+	if err := s.tenantRepo.AdjustStorageUsed(ctx, tenantInfo.ID, knowledge.StorageSize); err != nil {
+		logger.Warnf(ctx, "processMetadataOnlyChunks: failed to update tenant storage used: %v", err)
+	}
+
+	logger.Infof(ctx, "processMetadataOnlyChunks: successfully processed store_preview knowledge %s", knowledge.ID)
+}
+
 // GetSummary generates a summary for knowledge content using an AI model
 func (s *knowledgeService) getSummary(ctx context.Context,
 	summaryModel chat.Chat, knowledge *types.Knowledge, chunks []*types.Chunk,
@@ -2398,6 +2562,15 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 		// Strategy-based routing for reparse: override FileType for text_as_is
 		// types so DocReader uses TextParser.
 		reparseStrategy := getFileProcessStrategy(reparseFileType)
+
+		// store_preview files: rebuild metadata chunk + async embed (no DocReader).
+		if reparseStrategy == FileProcessStorePreview {
+			metaText := buildMetadataChunk(existing, existing.FileName)
+			go s.processMetadataOnlyChunks(context.Background(), kb, existing, metaText)
+			logger.Infof(ctx, "store_preview reparse: launched async metadata embedding for knowledge %s", existing.ID)
+			return existing, nil
+		}
+
 		if reparseStrategy == FileProcessTextAsIs {
 			taskPayload.FileType = "txt"
 		}
