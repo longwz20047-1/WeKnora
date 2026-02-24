@@ -207,10 +207,10 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		return nil, ErrInvalidFileType
 	}
 
-	// Validate file size based on file type strategy
+	// Safe: isValidFileType above guarantees a known file type
 	if err := validateFileSize(getFileType(fileName), file.Size); err != nil {
 		logger.Errorf(ctx, "File size validation failed: %v", err)
-		return nil, err
+		return nil, werrors.NewBadRequestError(err.Error())
 	}
 
 	// Calculate file hash for deduplication
@@ -271,6 +271,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 
 	// Create knowledge record
 	logger.Info(ctx, "Creating knowledge record")
+	fileType := getFileType(safeFilename)
 	knowledge := &types.Knowledge{
 		TenantID:         tenantID,
 		KnowledgeBaseID:  kbID,
@@ -278,7 +279,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		Type:             "file",
 		Title:            safeFilename,
 		FileName:         safeFilename,
-		FileType:         getFileType(safeFilename),
+		FileType:         fileType,
 		FileSize:         file.Size,
 		FileHash:         hash,
 		ParseStatus:      "pending",
@@ -335,7 +336,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		KnowledgeBaseID:          kbID,
 		FilePath:                 filePath,
 		FileName:                 safeFilename,
-		FileType:                 getFileType(safeFilename),
+		FileType:                 fileType,
 		EnableMultimodel:         enableMultimodelValue,
 		EnableQuestionGeneration: enableQuestionGeneration,
 		QuestionCount:            questionCount,
@@ -344,7 +345,6 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	// Strategy-based routing: override the task payload FileType for text_as_is
 	// types so DocReader uses TextParser.  The Knowledge record keeps the
 	// original extension (e.g. "py") for frontend syntax highlighting.
-	fileType := getFileType(safeFilename)
 	strategy := getFileProcessStrategy(fileType)
 	if strategy == FileProcessTextAsIs {
 		taskPayload.FileType = "txt"
@@ -372,7 +372,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		knowledge.ID,
 	)
 
-	if slices.Contains([]string{"csv", "xlsx", "xls"}, getFileType(safeFilename)) {
+	if slices.Contains([]string{"csv", "xlsx", "xls"}, fileType) {
 		NewDataTableSummaryTask(ctx, s.task, tenantID, knowledge.ID, kb.SummaryModelID, kb.EmbeddingModelID)
 	}
 
@@ -2346,13 +2346,14 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 			}
 		}
 
+		reparseFileType := getFileType(existing.FileName)
 		taskPayload := types.DocumentProcessPayload{
 			TenantID:                 tenantID,
 			KnowledgeID:              existing.ID,
 			KnowledgeBaseID:          existing.KnowledgeBaseID,
 			FilePath:                 existing.FilePath,
 			FileName:                 existing.FileName,
-			FileType:                 getFileType(existing.FileName),
+			FileType:                 reparseFileType,
 			EnableMultimodel:         enableMultimodel,
 			EnableQuestionGeneration: enableQuestionGeneration,
 			QuestionCount:            questionCount,
@@ -2360,7 +2361,6 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 
 		// Strategy-based routing for reparse: override FileType for text_as_is
 		// types so DocReader uses TextParser.
-		reparseFileType := getFileType(existing.FileName)
 		reparseStrategy := getFileProcessStrategy(reparseFileType)
 		if reparseStrategy == FileProcessTextAsIs {
 			taskPayload.FileType = "txt"
@@ -2381,7 +2381,7 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 		logger.Infof(ctx, "Enqueued reparse task: id=%s queue=%s knowledge_id=%s", info.ID, info.Queue, existing.ID)
 
 		// For data tables (csv, xlsx, xls), also enqueue summary task
-		if slices.Contains([]string{"csv", "xlsx", "xls"}, getFileType(existing.FileName)) {
+		if slices.Contains([]string{"csv", "xlsx", "xls"}, reparseFileType) {
 			NewDataTableSummaryTask(ctx, s.task, tenantID, existing.ID, kb.SummaryModelID, kb.EmbeddingModelID)
 		}
 
