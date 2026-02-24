@@ -36,6 +36,8 @@ var fullParseTypes = map[string]bool{
 	"bmp": true, "tiff": true, "webp": true,
 	// Email/Note/Archive formats
 	"eml": true, "msg": true, "enex": true, "mht": true, "mhtml": true,
+	// Jupyter Notebook
+	"ipynb": true,
 }
 
 // convertParseTypes need conversion (e.g. Calibre) before parsing.
