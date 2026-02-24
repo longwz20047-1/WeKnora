@@ -9,12 +9,16 @@ from docreader.parser.chm_parser import ChmParser
 from docreader.parser.csv_parser import CSVParser
 from docreader.parser.doc_parser import DocParser
 from docreader.parser.docx2_parser import Docx2Parser
+from docreader.parser.eml_parser import EmlParser
+from docreader.parser.enex_parser import EnexParser
 from docreader.parser.epub_parser import EpubParser
 from docreader.parser.excel_parser import ExcelParser
 from docreader.parser.fb2_parser import Fb2Parser
 from docreader.parser.image_parser import ImageParser
 from docreader.parser.libreoffice_parser import LibreOfficeParser
 from docreader.parser.markdown_parser import MarkdownParser
+from docreader.parser.mhtml_parser import MhtmlParser
+from docreader.parser.msg_parser import MsgParser
 from docreader.parser.pdf_parser import PDFParser
 from docreader.parser.text_parser import TextParser
 from docreader.parser.web_parser import WebParser
@@ -81,6 +85,14 @@ class Parser:
             "fb2": Fb2Parser,
             # CHM help files
             "chm": ChmParser,
+            # Email formats
+            "eml": EmlParser,
+            "msg": MsgParser,
+            # Note export formats
+            "enex": EnexParser,
+            # Web archive formats
+            "mht": MhtmlParser,
+            "mhtml": MhtmlParser,
         }
         logger.info(
             "Parser initialized with %d parsers: %s",

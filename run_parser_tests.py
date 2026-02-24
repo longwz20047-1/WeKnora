@@ -38,6 +38,7 @@ _MOCK_MODULES = frozenset({
     "google",
     "ebooklib",
     "chm",
+    "extract_msg",
 })
 
 
@@ -88,6 +89,10 @@ if __name__ == "__main__":
                 "docreader/parser/tests/test_epub_parser.py",
                 "docreader/parser/tests/test_chm_parser.py",
                 "docreader/parser/tests/test_fb2_parser.py",
+                "docreader/parser/tests/test_eml_parser.py",
+                "docreader/parser/tests/test_msg_parser.py",
+                "docreader/parser/tests/test_enex_parser.py",
+                "docreader/parser/tests/test_mhtml_parser.py",
             ]
             + sys.argv[1:]
         )
