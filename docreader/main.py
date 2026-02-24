@@ -177,7 +177,8 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                 response = ReadResponse(
                     chunks=[
                         self._convert_chunk_to_proto(chunk) for chunk in result.chunks
-                    ]
+                    ],
+                    metadata={k: str(v) for k, v in result.metadata.items()} if result.metadata else {},
                 )
                 logger.info(f"Response size: {response.ByteSize()} bytes")
                 return response
@@ -226,7 +227,8 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                 response = ReadResponse(
                     chunks=[
                         self._convert_chunk_to_proto(chunk) for chunk in result.chunks
-                    ]
+                    ],
+                    metadata={k: str(v) for k, v in result.metadata.items()} if result.metadata else {},
                 )
                 logger.info(f"Response size: {response.ByteSize()} bytes")
                 return response

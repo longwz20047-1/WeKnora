@@ -119,9 +119,18 @@ class Chunk(_message.Message):
     def __init__(self, content: _Optional[str] = ..., seq: _Optional[int] = ..., start: _Optional[int] = ..., end: _Optional[int] = ..., images: _Optional[_Iterable[_Union[Image, _Mapping]]] = ...) -> None: ...
 
 class ReadResponse(_message.Message):
-    __slots__ = ("chunks", "error")
+    __slots__ = ("chunks", "error", "metadata")
+    class MetadataEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     CHUNKS_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     chunks: _containers.RepeatedCompositeFieldContainer[Chunk]
     error: str
-    def __init__(self, chunks: _Optional[_Iterable[_Union[Chunk, _Mapping]]] = ..., error: _Optional[str] = ...) -> None: ...
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, chunks: _Optional[_Iterable[_Union[Chunk, _Mapping]]] = ..., error: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
