@@ -29,75 +29,68 @@ const (
 
 // fullParseTypes are file types that can be parsed natively by the platform.
 var fullParseTypes = map[string]bool{
-	// Documents
-	"pdf": true, "txt": true, "md": true, "markdown": true,
-	"docx": true, "doc": true, "xlsx": true, "xls": true,
-	// Images
-	"png": true, "jpg": true, "jpeg": true, "gif": true,
-	"bmp": true, "webp": true, "svg": true, "tiff": true, "tif": true,
-	// Data
-	"csv": true, "tsv": true, "json": true, "jsonl": true,
-	"xml": true, "html": true, "htm": true,
+	"pdf": true, "docx": true, "doc": true,
+	"md": true, "markdown": true, "txt": true,
+	"csv": true, "xlsx": true, "xls": true,
+	"jpg": true, "jpeg": true, "png": true, "gif": true,
+	"bmp": true, "tiff": true, "webp": true,
 }
 
 // convertParseTypes need conversion (e.g. Calibre) before parsing.
 var convertParseTypes = map[string]bool{
-	// Presentations
-	"pptx": true, "ppt": true, "odp": true,
-	// Rich text / legacy office
-	"rtf": true, "odt": true, "ods": true,
-	// E-books
-	"epub": true, "mobi": true, "azw3": true, "fb2": true,
-	// LaTeX
-	"tex": true, "latex": true,
+	"pptx": true, "ppt": true, "pptm": true, "potx": true, "potm": true,
+	"rtf": true, "odt": true, "ods": true, "odp": true,
+	"wps": true, "docm": true, "dotx": true, "dotm": true,
+	"xlsm": true, "xltx": true, "xltm": true,
+	"pages": true, "numbers": true, "key": true,
+	"vsdx": true, "vsd": true, "pub": true,
+	"hwp": true, "hwpx": true,
 }
 
 // textAsIsTypes are plain-text files ingested verbatim.
 var textAsIsTypes = map[string]bool{
-	// Programming languages
-	"py": true, "js": true, "ts": true, "jsx": true, "tsx": true,
-	"go": true, "rs": true, "java": true, "kt": true, "kts": true,
-	"c": true, "h": true, "cpp": true, "hpp": true, "cc": true, "cxx": true,
-	"cs": true, "swift": true, "m": true, "mm": true,
-	"rb": true, "php": true, "pl": true, "pm": true, "lua": true,
-	"r": true, "jl": true, "scala": true, "clj": true, "ex": true, "exs": true,
-	"erl": true, "hrl": true, "hs": true, "elm": true, "dart": true,
+	// 代码
+	"py": true, "java": true, "go": true, "ts": true, "js": true,
+	"jsx": true, "tsx": true, "vue": true, "c": true, "cpp": true,
+	"h": true, "hpp": true, "cs": true, "rb": true, "rs": true,
+	"php": true, "swift": true, "kt": true, "scala": true, "r": true,
+	"lua": true, "pl": true, "dart": true,
+	"zig": true, "nim": true, "asm": true, "s": true,
+	"hs": true, "ex": true, "exs": true, "erl": true,
+	"ml": true, "mli": true, "fs": true, "fsx": true,
+	"clj": true, "cljs": true, "groovy": true,
 	"v": true, "vhdl": true, "vhd": true,
-	// Shell / scripting
-	"sh": true, "bash": true, "zsh": true, "fish": true, "ps1": true,
-	"bat": true, "cmd": true,
-	// Web
-	"css": true, "scss": true, "sass": true, "less": true,
-	"vue": true, "svelte": true,
-	// Config / data
-	"yaml": true, "yml": true, "toml": true, "ini": true, "cfg": true,
-	"conf": true, "properties": true, "env": true,
-	// Build / CI
-	"cmake": true, "gradle": true, "sbt": true,
-	// Markup / docs
-	"rst": true, "adoc": true, "asciidoc": true, "org": true, "textile": true,
-	// SQL / query
-	"sql": true, "graphql": true, "gql": true,
-	// Proto / schema
-	"proto": true, "avro": true, "thrift": true,
-	// Other text
-	"log": true, "diff": true, "patch": true,
-	"gitignore": true, "dockerignore": true, "editorconfig": true,
+	"sol": true,
+	// 配置/数据
+	"json": true, "xml": true, "yaml": true, "yml": true, "toml": true,
+	"ini": true, "conf": true, "cfg": true, "env": true, "properties": true,
+	"gradle": true, "jsonl": true, "ndjson": true, "tsv": true,
+	// 脚本
+	"sh": true, "bash": true, "zsh": true, "bat": true, "cmd": true,
+	"ps1": true, "psm1": true,
+	// 文档标记
+	"html": true, "htm": true, "css": true, "less": true, "scss": true,
+	"sass": true, "svg": true, "tex": true, "latex": true,
+	"rst": true, "adoc": true, "org": true,
+	"rmd": true, "qmd": true, "opml": true,
+	// 字幕
+	"srt": true, "vtt": true, "ass": true, "ssa": true, "sub": true,
+	// 引用/学术
+	"bib": true, "ris": true, "csl": true,
+	// 日历/通讯录
+	"ics": true, "vcf": true,
+	// 其他文本
+	"log": true, "sql": true, "graphql": true, "proto": true, "thrift": true,
+	"makefile": true, "dockerfile": true, "gemfile": true, "rakefile": true, "cmake": true,
+	"gitignore": true, "editorconfig": true,
+	"dockerignore": true, "prettierrc": true, "eslintrc": true, "babelrc": true,
+	"npmrc": true, "yarnrc": true, "stylelintrc": true,
 }
 
 // storePreviewTypes are binary files stored for download & optional preview.
 var storePreviewTypes = map[string]bool{
-	// CAD / 3D
-	"stl": true, "obj": true, "step": true, "stp": true, "iges": true, "igs": true,
-	"dxf": true, "3mf": true, "fbx": true, "gltf": true, "glb": true,
-	// Audio
-	"mp3": true, "wav": true, "flac": true, "aac": true, "ogg": true, "wma": true,
-	// Video
-	"mp4": true, "avi": true, "mkv": true, "mov": true, "wmv": true, "flv": true, "webm": true,
-	// Archives
-	"zip": true, "tar": true, "gz": true, "bz2": true, "xz": true, "7z": true, "rar": true,
-	// Design
-	"psd": true, "ai": true, "sketch": true, "fig": true, "xd": true,
+	"stl": true, "obj": true, "fbx": true, "gltf": true, "glb": true,
+	"3ds": true, "dae": true, "ply": true, "dxf": true, "psd": true,
 }
 
 // specialFileNames maps well-known filenames (case-insensitive) to a
@@ -120,20 +113,21 @@ var fileSizeLimits = map[string]int64{
 
 // fileTypeSizeOverrides provides per-type size overrides (bytes).
 var fileTypeSizeOverrides = map[string]int64{
-	// Images are usually small; cap at 20 MB.
-	"png": 20 * 1024 * 1024, "jpg": 20 * 1024 * 1024, "jpeg": 20 * 1024 * 1024,
-	"gif": 20 * 1024 * 1024, "bmp": 20 * 1024 * 1024, "webp": 20 * 1024 * 1024,
-	"svg": 20 * 1024 * 1024, "tiff": 20 * 1024 * 1024, "tif": 20 * 1024 * 1024,
+	"psd":  500 * 1024 * 1024,
+	"epub": 200 * 1024 * 1024,
+	"chm":  100 * 1024 * 1024,
+	"jpg":  20 * 1024 * 1024, "jpeg": 20 * 1024 * 1024,
+	"png":  20 * 1024 * 1024, "gif": 20 * 1024 * 1024,
+	"bmp":  20 * 1024 * 1024, "tiff": 20 * 1024 * 1024,
+	"webp": 20 * 1024 * 1024,
 }
 
-// calibreAvailable is set during init() when the calibre ebook-convert CLI is
-// found on PATH. When false, convertParseTypes that require Calibre are not
-// registered.
-var calibreAvailable bool
-
 func init() {
-	_, err := exec.LookPath("ebook-convert")
-	calibreAvailable = err == nil
+	if _, err := exec.LookPath("ebook-convert"); err == nil {
+		for _, ext := range []string{"azw3", "azw", "prc", "mobi"} {
+			fullParseTypes[ext] = true
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -212,11 +206,11 @@ func getFileSizeLimit(fileType string) int64 {
 }
 
 // validateFileSize checks whether the given size (bytes) is within the limit
-// for the file type.  Returns nil when acceptable, or a descriptive error.
+// for the file type.  Returns nil when acceptable, or a machine-parseable error.
 func validateFileSize(fileType string, size int64) error {
 	limit := getFileSizeLimit(fileType)
 	if size > limit {
-		return fmt.Errorf("file size %d bytes exceeds limit %d bytes for type %q", size, limit, fileType)
+		return fmt.Errorf("FILE_TOO_LARGE:%s:%d:%d", fileType, size, limit)
 	}
 	return nil
 }
