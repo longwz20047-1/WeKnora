@@ -23,10 +23,10 @@ protoc -I${PROTO_DIR} --go_out=${GO_OUT} \
 # 修复Python导入问题（MacOS兼容版本）
 if [ "$(uname)" == "Darwin" ]; then
     # MacOS版本
-    sed -i '' 's/import docreader_pb2/from docreader.proto import docreader_pb2/g' ${PYTHON_OUT}/docreader_pb2_grpc.py
+    sed -i '' 's/^import docreader_pb2/from docreader.proto import docreader_pb2/g' ${PYTHON_OUT}/docreader_pb2_grpc.py
 else
     # Linux版本
-    sed -i 's/import docreader_pb2/from docreader.proto import docreader_pb2/g' ${PYTHON_OUT}/docreader_pb2_grpc.py
+    sed -i 's/^import docreader_pb2/from docreader.proto import docreader_pb2/g' ${PYTHON_OUT}/docreader_pb2_grpc.py
 fi
 
 echo "Proto files generated successfully!"
