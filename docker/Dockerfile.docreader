@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y \
     antiword \
     curl \
     unzip \
+    libchm-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 检查是否存在本地protoc安装包，如果存在则离线安装，否则在线安装,其他安装包按需求添加
