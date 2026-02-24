@@ -120,6 +120,8 @@ RUN apt-get update && apt-get install -y \
     libglu1-mesa \
     libsm6 \
     libreoffice \
+    fonts-noto-cjk \
+    libchm-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

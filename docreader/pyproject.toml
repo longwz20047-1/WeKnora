@@ -35,4 +35,7 @@ dependencies = [
     "textract==1.5.0",
     "trafilatura>=2.0.0",
     "urllib3>=2.5.0",
+    "ebooklib>=0.18",
+    "pychm>=0.8.4;sys_platform=='linux'",
+    "defusedxml>=0.7",
 ]
