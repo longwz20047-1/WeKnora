@@ -113,9 +113,10 @@ var fileSizeLimits = map[string]int64{
 
 // fileTypeSizeOverrides provides per-type size overrides (bytes).
 var fileTypeSizeOverrides = map[string]int64{
-	"psd":  500 * 1024 * 1024,
-	"epub": 200 * 1024 * 1024,
-	"chm":  100 * 1024 * 1024,
+	"psd": 500 * 1024 * 1024,
+	// Pre-provisioned for Phase 3 (dedicated EPUB/CHM parsers)
+	"epub": 200 * 1024 * 1024, // 200MB
+	"chm":  100 * 1024 * 1024, // 100MB
 	"jpg":  20 * 1024 * 1024, "jpeg": 20 * 1024 * 1024,
 	"png":  20 * 1024 * 1024, "gif": 20 * 1024 * 1024,
 	"bmp":  20 * 1024 * 1024, "tiff": 20 * 1024 * 1024,
@@ -129,6 +130,8 @@ func init() {
 		}
 	}
 }
+
+// After init(), all type maps should be treated as read-only.
 
 // ---------------------------------------------------------------------------
 // Public / package-level helpers
@@ -179,11 +182,11 @@ func getFileProcessStrategy(fileType string) string {
 	if fullParseTypes[fileType] {
 		return FileProcessFullParse
 	}
-	if textAsIsTypes[fileType] {
-		return FileProcessTextAsIs
-	}
 	if convertParseTypes[fileType] {
 		return FileProcessConvertParse
+	}
+	if textAsIsTypes[fileType] {
+		return FileProcessTextAsIs
 	}
 	if storePreviewTypes[fileType] {
 		return FileProcessStorePreview

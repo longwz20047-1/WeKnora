@@ -77,6 +77,8 @@ func TestGetFileProcessStrategy(t *testing.T) {
 		{"rtf", FileProcessConvertParse},
 		{"stl", FileProcessStorePreview},
 		{"dxf", FileProcessStorePreview},
+		{"exe", ""},
+		{"unknown", ""},
 	}
 
 	for _, tt := range tests {
@@ -90,26 +92,33 @@ func TestGetFileProcessStrategy(t *testing.T) {
 }
 
 func TestGetFileSizeLimit(t *testing.T) {
-	if limit := getFileSizeLimit("jpg"); limit != 20*1024*1024 {
-		t.Errorf("jpg limit = %d, want %d", limit, 20*1024*1024)
+	tests := []struct {
+		fileType string
+		expected int64
+	}{
+		{"psd", 500 * 1024 * 1024},
+		{"epub", 200 * 1024 * 1024},
+		{"chm", 100 * 1024 * 1024},
+		{"jpg", 20 * 1024 * 1024},
+		{"jpeg", 20 * 1024 * 1024},
+		{"png", 20 * 1024 * 1024},
+		{"gif", 20 * 1024 * 1024},
+		{"bmp", 20 * 1024 * 1024},
+		{"tiff", 20 * 1024 * 1024},
+		{"webp", 20 * 1024 * 1024},
+		{"pdf", 50 * 1024 * 1024},
+		{"py", 10 * 1024 * 1024},
+		{"pptx", 100 * 1024 * 1024},
+		{"stl", 200 * 1024 * 1024},
 	}
-	if limit := getFileSizeLimit("py"); limit != 10*1024*1024 {
-		t.Errorf("py limit = %d, want %d", limit, 10*1024*1024)
-	}
-	if limit := getFileSizeLimit("pdf"); limit != 50*1024*1024 {
-		t.Errorf("pdf limit = %d, want %d", limit, 50*1024*1024)
-	}
-	if limit := getFileSizeLimit("pptx"); limit != 100*1024*1024 {
-		t.Errorf("pptx limit = %d, want %d", limit, 100*1024*1024)
-	}
-	if limit := getFileSizeLimit("psd"); limit != 500*1024*1024 {
-		t.Errorf("psd limit = %d, want %d", limit, 500*1024*1024)
-	}
-	if limit := getFileSizeLimit("epub"); limit != 200*1024*1024 {
-		t.Errorf("epub limit = %d, want %d", limit, 200*1024*1024)
-	}
-	if limit := getFileSizeLimit("chm"); limit != 100*1024*1024 {
-		t.Errorf("chm limit = %d, want %d", limit, 100*1024*1024)
+
+	for _, tt := range tests {
+		t.Run(tt.fileType, func(t *testing.T) {
+			limit := getFileSizeLimit(tt.fileType)
+			if limit != tt.expected {
+				t.Errorf("getFileSizeLimit(%q) = %d, want %d", tt.fileType, limit, tt.expected)
+			}
+		})
 	}
 }
 
