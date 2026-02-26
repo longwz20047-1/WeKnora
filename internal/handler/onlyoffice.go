@@ -78,16 +78,17 @@ func generateDocKey(knowledgeID string, updatedAt time.Time) string {
 	return fmt.Sprintf("%s_%s", knowledgeID, hex.EncodeToString(hash.Sum(nil))[:8])
 }
 
-// downloadCallbackFile downloads a file with SSRF protection and size limits.
+// downloadCallbackFile downloads the modified file from ONLYOFFICE.
+// Uses a plain HTTP client (no SSRF protection) because ONLYOFFICE is a trusted
+// internal service running on the Docker network with a private IP.
 func (h *OnlyOfficeHandler) downloadCallbackFile(downloadURL string) ([]byte, error) {
-	client := secutils.NewSSRFSafeHTTPClient(secutils.SSRFSafeHTTPClientConfig{
-		Timeout:      5 * time.Minute,
-		MaxRedirects: 5,
-	})
+	client := &http.Client{
+		Timeout: 5 * time.Minute,
+	}
 
 	resp, err := client.Get(downloadURL)
 	if err != nil {
-		return nil, fmt.Errorf("download failed (SSRF check may have blocked): %w", err)
+		return nil, fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
 
