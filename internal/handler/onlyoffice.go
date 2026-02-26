@@ -300,7 +300,7 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 		return
 	}
 	parser := jwt.NewParser()
-	_, err := parser.Parse(cb.Token, func(token *jwt.Token) (interface{}, error) {
+	token, err := parser.Parse(cb.Token, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -310,6 +310,31 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 		logger.Warnf(ctx, "[ONLYOFFICE] callback rejected: invalid JWT, key=%s err=%v", cb.Key, err)
 		c.JSON(http.StatusOK, gin.H{"error": 0})
 		return
+	}
+
+	// When JWT_IN_BODY=true, the actual callback data is inside the JWT payload,
+	// not at the top level of the JSON body. Extract fields from JWT claims.
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		// The payload may be nested under a "payload" key or flat at root
+		data := claims
+		if nested, ok := claims["payload"].(map[string]interface{}); ok {
+			data = jwt.MapClaims(nested)
+		}
+		if cb.Status == 0 {
+			if s, ok := data["status"].(float64); ok {
+				cb.Status = int(s)
+			}
+		}
+		if cb.Key == "" {
+			if k, ok := data["key"].(string); ok {
+				cb.Key = k
+			}
+		}
+		if cb.URL == "" {
+			if u, ok := data["url"].(string); ok {
+				cb.URL = u
+			}
+		}
 	}
 
 	// Status 4 = no changes, just acknowledge
