@@ -364,9 +364,47 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 		}
 	}
 
-	// Status 4 = no changes, just acknowledge
+	// Status 4 = document closed with no changes since last save.
+	// If a prior status 6 (autosave) already saved new content, we still need
+	// to trigger reparse so vectors/chunks reflect the latest file.
 	if cb.Status == 4 {
-		logger.Infof(ctx, "[ONLYOFFICE] callback status=4 (no changes), key=%s", cb.Key)
+		logger.Infof(ctx, "[ONLYOFFICE] callback status=4 (closed, no new changes), key=%s", cb.Key)
+
+		knowledgeID := cb.Key
+		if idx := strings.LastIndex(cb.Key, "_"); idx > 0 {
+			knowledgeID = cb.Key[:idx]
+		}
+
+		// Check if a prior status 6 saved new content (dirty flag set by status 6 handler)
+		dirtyKey := fmt.Sprintf("onlyoffice:dirty:%s", knowledgeID)
+		dirty := false
+		if h.redis != nil {
+			if val, err := h.redis.GetDel(ctx, dirtyKey).Result(); err == nil && val == "1" {
+				dirty = true
+			}
+		}
+
+		if dirty {
+			knowledge, err := h.kgService.GetKnowledgeByIDOnly(ctx, knowledgeID)
+			if err != nil {
+				logger.Warnf(ctx, "[ONLYOFFICE] knowledge not found for status 4 reparse: id=%s err=%v", knowledgeID, err)
+				c.JSON(http.StatusOK, gin.H{"error": 0})
+				return
+			}
+			ctx = context.WithValue(ctx, types.TenantIDContextKey, knowledge.TenantID)
+			knowledge.UpdatedAt = time.Now()
+			if err := h.kgService.UpdateKnowledge(ctx, knowledge); err != nil {
+				logger.Warnf(ctx, "[ONLYOFFICE] failed to update knowledge for status 4: %v", err)
+			}
+			if _, reparseErr := h.kgService.ReparseKnowledge(ctx, knowledgeID); reparseErr != nil {
+				logger.Warnf(ctx, "[ONLYOFFICE] reparse failed for %s on status 4: %v", knowledgeID, reparseErr)
+			} else {
+				logger.Infof(ctx, "[ONLYOFFICE] reparse queued for %s after document close (status 4, dirty)", knowledgeID)
+			}
+		} else {
+			logger.Infof(ctx, "[ONLYOFFICE] no prior autosave for %s, skipping reparse on status 4", knowledgeID)
+		}
+
 		c.JSON(http.StatusOK, gin.H{"error": 0})
 		return
 	}
@@ -429,10 +467,21 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 		logger.Errorf(ctx, "[ONLYOFFICE] callback save failed for %s: %v", knowledgeID, saveErr)
 	} else {
 		logger.Infof(ctx, "[ONLYOFFICE] callback save succeeded for %s (status=%d)", knowledgeID, cb.Status)
+
+		// Mark document as dirty on status 6 (autosave) so that a subsequent
+		// status 4 (close without new changes) knows to trigger reparse.
+		if cb.Status == 6 && h.redis != nil {
+			dirtyKey := fmt.Sprintf("onlyoffice:dirty:%s", knowledgeID)
+			h.redis.Set(ctx, dirtyKey, "1", 24*time.Hour)
+		}
 	}
 
 	// Status 2 = final save (all editors closed) → trigger re-parse to update chunks & vectors
 	if saveErr == nil && cb.Status == 2 {
+		// Clear dirty flag since we're reparsing now
+		if h.redis != nil {
+			h.redis.Del(ctx, fmt.Sprintf("onlyoffice:dirty:%s", knowledgeID))
+		}
 		if _, reparseErr := h.kgService.ReparseKnowledge(ctx, knowledgeID); reparseErr != nil {
 			logger.Warnf(ctx, "[ONLYOFFICE] reparse failed for %s: %v", knowledgeID, reparseErr)
 		} else {
