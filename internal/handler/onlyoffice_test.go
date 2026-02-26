@@ -122,14 +122,14 @@ func parseJSON(w *httptest.ResponseRecorder) map[string]interface{} {
 // ---------------------------------------------------------------------------
 
 func TestEnabled_WithConfig(t *testing.T) {
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil, nil)
 	if !h.Enabled() {
 		t.Error("expected Enabled()=true with valid config")
 	}
 }
 
 func TestEnabled_NilConfig(t *testing.T) {
-	h := NewOnlyOfficeHandler(&config.Config{}, nil, nil, nil)
+	h := NewOnlyOfficeHandler(&config.Config{}, nil, nil, nil, nil)
 	if h.Enabled() {
 		t.Error("expected Enabled()=false with nil OnlyOffice config")
 	}
@@ -175,7 +175,7 @@ func TestGenerateDocKey_DifferentTimestamps(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetEditorConfig_Disabled(t *testing.T) {
-	h := NewOnlyOfficeHandler(&config.Config{}, nil, nil, nil)
+	h := NewOnlyOfficeHandler(&config.Config{}, nil, nil, nil, nil)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/config/kid-123?mode=view", nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
 
@@ -193,7 +193,7 @@ func TestGetEditorConfig_UnsupportedType(t *testing.T) {
 			UpdatedAt: time.Now(),
 		},
 	}
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil, nil)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/config/kid-1?mode=view", nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-1"}}
 	c.Set(types.TenantIDContextKey.String(), uint64(1))
@@ -208,7 +208,7 @@ func TestGetEditorConfig_UnsupportedType(t *testing.T) {
 
 func TestGetEditorConfig_ViewMode_EditableType(t *testing.T) {
 	kgSvc := &mockKnowledgeService{knowledge: testKnowledge()}
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil, nil)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/config/kid-123?mode=view", nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
 	c.Set(types.TenantIDContextKey.String(), uint64(1))
@@ -237,7 +237,7 @@ func TestGetEditorConfig_ViewMode_EditableType(t *testing.T) {
 
 func TestGetEditorConfig_EditMode_EditableType(t *testing.T) {
 	kgSvc := &mockKnowledgeService{knowledge: testKnowledge()}
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil, nil)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/config/kid-123?mode=edit", nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
 	c.Set(types.TenantIDContextKey.String(), uint64(1))
@@ -264,7 +264,7 @@ func TestGetEditorConfig_EditMode_NonEditableType(t *testing.T) {
 	kg := testKnowledge()
 	kg.FileName = "legacy.doc" // .doc is NOT in editableTypes
 	kgSvc := &mockKnowledgeService{knowledge: kg}
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil, nil)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/config/kid-123?mode=edit", nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
 	c.Set(types.TenantIDContextKey.String(), uint64(1))
@@ -290,7 +290,7 @@ func TestGetEditorConfig_EditMode_NonEditableType(t *testing.T) {
 
 func TestGetEditorConfig_HasJWTToken(t *testing.T) {
 	kgSvc := &mockKnowledgeService{knowledge: testKnowledge()}
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil, nil)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/config/kid-123?mode=view", nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
 	c.Set(types.TenantIDContextKey.String(), uint64(1))
@@ -320,7 +320,7 @@ func TestGetEditorConfig_HasJWTToken(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServeFile_Disabled(t *testing.T) {
-	h := NewOnlyOfficeHandler(&config.Config{}, nil, nil, nil)
+	h := NewOnlyOfficeHandler(&config.Config{}, nil, nil, nil, nil)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/file/kid-123?token=x", nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
 
@@ -332,7 +332,7 @@ func TestServeFile_Disabled(t *testing.T) {
 }
 
 func TestServeFile_InvalidToken(t *testing.T) {
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil, nil)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/file/kid-123?token=invalid", nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
 
@@ -344,7 +344,7 @@ func TestServeFile_InvalidToken(t *testing.T) {
 }
 
 func TestServeFile_TokenIDMismatch(t *testing.T) {
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil, nil)
 	token := secutils.GenerateHMACToken("hmac", "other-id", 1, 5*time.Minute)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/file/kid-123?token="+token, nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
@@ -366,7 +366,7 @@ func TestServeFile_ValidToken_StreamsFile(t *testing.T) {
 		fileData: fileContent,
 		fileName: "test.docx",
 	}
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), kgSvc, nil, nil, nil)
 	token := secutils.GenerateHMACToken("hmac", "kid-123", 1, 5*time.Minute)
 	c, w := newGinContext("GET", "/api/v1/onlyoffice/file/kid-123?token="+token, nil)
 	c.Params = gin.Params{{Key: "id", Value: "kid-123"}}
@@ -386,7 +386,7 @@ func TestServeFile_ValidToken_StreamsFile(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleCallback_Disabled(t *testing.T) {
-	h := NewOnlyOfficeHandler(&config.Config{}, nil, nil, nil)
+	h := NewOnlyOfficeHandler(&config.Config{}, nil, nil, nil, nil)
 	c, w := newGinContext("POST", "/api/v1/onlyoffice/callback", strings.NewReader(`{}`))
 
 	h.HandleCallback(c)
@@ -397,7 +397,7 @@ func TestHandleCallback_Disabled(t *testing.T) {
 }
 
 func TestHandleCallback_MissingToken_Rejected(t *testing.T) {
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil, nil)
 	body := `{"key":"kid-123_abc12345","status":2,"url":"http://example.com/file"}`
 	c, w := newGinContext("POST", "/api/v1/onlyoffice/callback", strings.NewReader(body))
 
@@ -409,7 +409,7 @@ func TestHandleCallback_MissingToken_Rejected(t *testing.T) {
 }
 
 func TestHandleCallback_EmptyToken_Rejected(t *testing.T) {
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil, nil)
 	body := `{"key":"kid-123_abc12345","status":2,"url":"http://example.com/file","token":""}`
 	c, w := newGinContext("POST", "/api/v1/onlyoffice/callback", strings.NewReader(body))
 
@@ -421,7 +421,7 @@ func TestHandleCallback_EmptyToken_Rejected(t *testing.T) {
 }
 
 func TestHandleCallback_InvalidJWT_Rejected(t *testing.T) {
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil, nil)
 	body := `{"key":"kid-123_abc12345","status":2,"url":"http://example.com/file","token":"invalid.jwt.token"}`
 	c, w := newGinContext("POST", "/api/v1/onlyoffice/callback", strings.NewReader(body))
 
@@ -439,7 +439,7 @@ func TestHandleCallback_WrongSecret_Rejected(t *testing.T) {
 	})
 	signed, _ := wrongToken.SignedString([]byte("wrong-secret"))
 
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil, nil)
 	body := `{"key":"kid-123_abc12345","status":2,"url":"http://example.com/file","token":"` + signed + `"}`
 	c, w := newGinContext("POST", "/api/v1/onlyoffice/callback", strings.NewReader(body))
 
@@ -457,7 +457,7 @@ func TestHandleCallback_Status4_NoOp(t *testing.T) {
 	})
 	signed, _ := validToken.SignedString([]byte("secret"))
 
-	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil)
+	h := NewOnlyOfficeHandler(testConfig("secret", "hmac"), nil, nil, nil, nil)
 	body := `{"key":"kid-123_abc12345","status":4,"url":"","token":"` + signed + `"}`
 	c, w := newGinContext("POST", "/api/v1/onlyoffice/callback", strings.NewReader(body))
 

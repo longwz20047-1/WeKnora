@@ -46,24 +46,27 @@ var editableTypes = map[string]bool{
 
 // OnlyOfficeHandler manages ONLYOFFICE DocumentServer integration.
 type OnlyOfficeHandler struct {
-	cfg       *config.Config
-	kgService interfaces.KnowledgeService
-	fileSvc   interfaces.FileService
-	redis     *redis.Client
+	cfg        *config.Config
+	kgService  interfaces.KnowledgeService
+	tenantSvc  interfaces.TenantService
+	fileSvc    interfaces.FileService
+	redis      *redis.Client
 }
 
 // NewOnlyOfficeHandler always returns a valid instance (never nil).
 func NewOnlyOfficeHandler(
 	cfg *config.Config,
 	kgService interfaces.KnowledgeService,
+	tenantSvc interfaces.TenantService,
 	fileSvc interfaces.FileService,
 	redis *redis.Client,
 ) *OnlyOfficeHandler {
 	return &OnlyOfficeHandler{
-		cfg:       cfg,
-		kgService: kgService,
-		fileSvc:   fileSvc,
-		redis:     redis,
+		cfg:        cfg,
+		kgService:  kgService,
+		tenantSvc:  tenantSvc,
+		fileSvc:    fileSvc,
+		redis:      redis,
 	}
 }
 
@@ -392,6 +395,13 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 				return
 			}
 			ctx = context.WithValue(ctx, types.TenantIDContextKey, knowledge.TenantID)
+			tenant, err := h.tenantSvc.GetTenantByID(ctx, knowledge.TenantID)
+			if err != nil {
+				logger.Warnf(ctx, "[ONLYOFFICE] tenant not found for status 4: tenantID=%d err=%v", knowledge.TenantID, err)
+				c.JSON(http.StatusOK, gin.H{"error": 0})
+				return
+			}
+			ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenant)
 			knowledge.UpdatedAt = time.Now()
 			if err := h.kgService.UpdateKnowledge(ctx, knowledge); err != nil {
 				logger.Warnf(ctx, "[ONLYOFFICE] failed to update knowledge for status 4: %v", err)
@@ -432,6 +442,15 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 	}
 
 	ctx = context.WithValue(ctx, types.TenantIDContextKey, knowledge.TenantID)
+
+	// ReparseKnowledge (and its downstream calls) require *types.Tenant in context.
+	tenant, err := h.tenantSvc.GetTenantByID(ctx, knowledge.TenantID)
+	if err != nil {
+		logger.Warnf(ctx, "[ONLYOFFICE] tenant not found for callback: tenantID=%d err=%v", knowledge.TenantID, err)
+		c.JSON(http.StatusOK, gin.H{"error": 0})
+		return
+	}
+	ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenant)
 
 	saveErr := h.withSaveLock(ctx, knowledgeID, func() error {
 		data, err := h.downloadCallbackFile(cb.URL)
