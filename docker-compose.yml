@@ -275,6 +275,36 @@ services:
       - qdrant
       - full
 
+  onlyoffice:
+    image: onlyoffice/documentserver:8.2
+    container_name: WeKnora-onlyoffice
+    ports:
+      - "${ONLYOFFICE_PORT:-8443}:80"
+    environment:
+      - JWT_ENABLED=true
+      - JWT_SECRET=${ONLYOFFICE_JWT_SECRET:-weknora-onlyoffice-secret}
+      - JWT_HEADER=Authorization
+      - JWT_IN_BODY=true
+      # 允许连接私有 IP（WeKnora 后端在内网）
+      - ALLOW_PRIVATE_IP_ADDRESS=true
+      - ALLOW_META_IP_ADDRESS=true
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_log:/var/log/onlyoffice
+      - onlyoffice_lib:/var/lib/onlyoffice
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - WeKnora-network
+    restart: unless-stopped
+    profiles:
+      - onlyoffice
+      - full
+
 networks:
   WeKnora-network:
     driver: bridge
@@ -286,3 +316,6 @@ volumes:
   minio_data:
   neo4j-data:
   qdrant_data:
+  onlyoffice_data:
+  onlyoffice_log:
+  onlyoffice_lib:
