@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -79,11 +80,15 @@ func generateDocKey(knowledgeID string, updatedAt time.Time) string {
 }
 
 // downloadCallbackFile downloads the modified file from ONLYOFFICE.
-// Uses a plain HTTP client (no SSRF protection) because ONLYOFFICE is a trusted
-// internal service running on the Docker network with a private IP.
+// Rewrites the download URL to use the Docker-internal ONLYOFFICE address
+// since the callback URL from ONLYOFFICE uses the external address which
+// is not reachable from inside the Docker network.
 func (h *OnlyOfficeHandler) downloadCallbackFile(downloadURL string) ([]byte, error) {
+	// Rewrite external URL to internal Docker address
+	downloadURL = h.rewriteToInternalURL(downloadURL)
+
 	client := &http.Client{
-		Timeout: 5 * time.Minute,
+		Timeout: 2 * time.Minute,
 	}
 
 	resp, err := client.Get(downloadURL)
@@ -106,6 +111,28 @@ func (h *OnlyOfficeHandler) downloadCallbackFile(downloadURL string) ([]byte, er
 		return nil, fmt.Errorf("file exceeds maximum size of %d bytes", maxDownloadSize)
 	}
 	return data, nil
+}
+
+// rewriteToInternalURL replaces the host:port of a download URL with the
+// Docker-internal ONLYOFFICE address. The callback URL from ONLYOFFICE uses
+// the external address (e.g. http://192.168.100.30:8443/...) which the app
+// container cannot reach. Rewrite it to http://onlyoffice:80/...
+func (h *OnlyOfficeHandler) rewriteToInternalURL(downloadURL string) string {
+	dsURL := h.cfg.OnlyOffice.DocServerURL
+	if dsURL == "" {
+		return downloadURL
+	}
+	parsed, err := url.Parse(downloadURL)
+	if err != nil {
+		return downloadURL
+	}
+	internal, err := url.Parse(dsURL)
+	if err != nil {
+		return downloadURL
+	}
+	parsed.Scheme = internal.Scheme
+	parsed.Host = internal.Host
+	return parsed.String()
 }
 
 // withSaveLock acquires a Redis distributed lock for concurrent save safety.

@@ -53,10 +53,11 @@ type BrowserlessConfig struct {
 
 // OnlyOfficeConfig ONLYOFFICE DocumentServer configuration
 type OnlyOfficeConfig struct {
-	JWTSecret   string `yaml:"jwt_secret"   json:"jwt_secret"`
-	HMACSecret  string `yaml:"hmac_secret"  json:"hmac_secret"`
-	InternalURL string `yaml:"internal_url" json:"internal_url"`
-	ExternalURL string `yaml:"external_url" json:"external_url"`
+	JWTSecret    string `yaml:"jwt_secret"     json:"jwt_secret"`
+	HMACSecret   string `yaml:"hmac_secret"    json:"hmac_secret"`
+	InternalURL  string `yaml:"internal_url"   json:"internal_url"`
+	ExternalURL  string `yaml:"external_url"   json:"external_url"`
+	DocServerURL string `yaml:"doc_server_url" json:"doc_server_url"` // ONLYOFFICE URL from app container (default: http://onlyoffice:80)
 }
 
 type VectorDatabaseConfig struct {

@@ -731,11 +731,17 @@ func initOnlyOfficeConfig(cfg *config.Config) {
 		logger.Warnf(context.Background(), "[Container] ONLYOFFICE_HMAC_SECRET not set, using JWT_SECRET as fallback")
 		hmacSecret = jwtSecret
 	}
-	cfg.OnlyOffice = &config.OnlyOfficeConfig{
-		JWTSecret:   jwtSecret,
-		HMACSecret:  hmacSecret,
-		InternalURL: internalURL,
-		ExternalURL: os.Getenv("ONLYOFFICE_EXTERNAL_URL"),
+	// ONLYOFFICE DocServer URL as seen from the app container (for downloading callback files)
+	docServerURL := os.Getenv("ONLYOFFICE_DS_URL")
+	if docServerURL == "" {
+		docServerURL = "http://onlyoffice:80"
 	}
-	logger.Infof(context.Background(), "[Container] ONLYOFFICE configured (internal: %s)", internalURL)
+	cfg.OnlyOffice = &config.OnlyOfficeConfig{
+		JWTSecret:    jwtSecret,
+		HMACSecret:   hmacSecret,
+		InternalURL:  internalURL,
+		ExternalURL:  os.Getenv("ONLYOFFICE_EXTERNAL_URL"),
+		DocServerURL: docServerURL,
+	}
+	logger.Infof(context.Background(), "[Container] ONLYOFFICE configured (internal: %s, docserver: %s)", internalURL, docServerURL)
 }
