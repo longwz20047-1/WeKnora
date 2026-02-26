@@ -380,5 +380,14 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 		logger.Errorf(ctx, "[ONLYOFFICE] callback save failed for %s: %v", knowledgeID, saveErr)
 	}
 
+	// Status 2 = final save (all editors closed) → trigger re-parse to update chunks & vectors
+	if saveErr == nil && cb.Status == 2 {
+		if _, reparseErr := h.kgService.ReparseKnowledge(ctx, knowledgeID); reparseErr != nil {
+			logger.Warnf(ctx, "[ONLYOFFICE] reparse failed for %s: %v", knowledgeID, reparseErr)
+		} else {
+			logger.Infof(ctx, "[ONLYOFFICE] reparse queued for %s after final save", knowledgeID)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"error": 0})
 }
