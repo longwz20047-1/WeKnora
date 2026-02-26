@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net/url"
 	"regexp"
 	"runtime"
 	"slices"
@@ -2339,7 +2340,17 @@ func (s *knowledgeService) GetKnowledgePDFPreview(ctx context.Context, id string
 	}
 
 	// Get the PDF file from storage
-	file, err := s.fileSvc.GetFile(ctx, pdfPathStr)
+	// pdf_preview_path may be an HTTP URL (from MinIO public endpoint) or minio:// path.
+	// Convert HTTP URL to minio:// format if needed.
+	storagePath := pdfPathStr
+	if !strings.HasPrefix(storagePath, "minio://") && (strings.HasPrefix(storagePath, "http://") || strings.HasPrefix(storagePath, "https://")) {
+		// Parse HTTP URL and convert path to minio:// format
+		// e.g. http://host:port/bucket/object -> minio://bucket/object
+		if u, err := url.Parse(storagePath); err == nil && u.Path != "" {
+			storagePath = "minio:/" + u.Path // u.Path already starts with /
+		}
+	}
+	file, err := s.fileSvc.GetFile(ctx, storagePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get PDF preview file: %w", err)
 	}
