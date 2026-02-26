@@ -14,6 +14,7 @@ from docreader.config import CONFIG
 from docreader.utils import endecode
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class Storage(ABC):

@@ -21,6 +21,7 @@ from docreader.parser.base_parser import BaseParser
 from docreader.parser.pdf_parser import PDFParser
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # Common paths where LibreOffice may be installed
 _SOFFICE_CANDIDATES = [
@@ -196,6 +197,13 @@ class LibreOfficeParser(BaseParser):
                     logger.info(
                         "LibreOfficeParser: uploaded PDF preview to %s",
                         upload_url,
+                    )
+                else:
+                    logger.warning(
+                        "LibreOfficeParser: storage.upload_bytes returned empty URL, "
+                        "pdf_preview_path will not be set. storage type=%s, client=%s",
+                        type(self.storage).__name__,
+                        getattr(self.storage, 'client', 'N/A'),
                     )
             except Exception:
                 logger.warning(
