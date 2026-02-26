@@ -51,6 +51,7 @@ type RouterParams struct {
 	SkillHandler          *handler.SkillHandler
 	OrganizationHandler   *handler.OrganizationHandler
 	BrowserHandler        *handler.BrowserHandler
+	OnlyOfficeHandler     *handler.OnlyOfficeHandler
 }
 
 // NewRouter 创建新的路由
@@ -89,6 +90,13 @@ func NewRouter(params RouterParams) *gin.Engine {
 		))
 	}
 
+	// ONLYOFFICE unauthenticated routes (HMAC/JWT verified internally)
+	if params.OnlyOfficeHandler.Enabled() {
+		oo := r.Group("/api/v1/onlyoffice")
+		oo.GET("/file/:id", params.OnlyOfficeHandler.ServeFile)
+		oo.POST("/callback", params.OnlyOfficeHandler.HandleCallback)
+	}
+
 	// 认证中间件
 	r.Use(middleware.Auth(params.TenantService, params.UserService, params.Config))
 
@@ -119,6 +127,12 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterSkillRoutes(v1, params.SkillHandler)
 		RegisterOrganizationRoutes(v1, params.OrganizationHandler)
 		RegisterBrowserRoutes(v1, params.BrowserHandler)
+
+		// ONLYOFFICE authenticated route
+		if params.OnlyOfficeHandler.Enabled() {
+			onlyoffice := v1.Group("/onlyoffice")
+			onlyoffice.GET("/config/:id", params.OnlyOfficeHandler.GetEditorConfig)
+		}
 	}
 
 	return r
