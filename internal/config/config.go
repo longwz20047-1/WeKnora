@@ -25,6 +25,7 @@ type Config struct {
 	DocReader       *DocReaderConfig       `yaml:"docreader"        json:"docreader"`
 	Firecrawl       *FirecrawlConfig       `yaml:"firecrawl"        json:"firecrawl"`
 	Browserless     *BrowserlessConfig     `yaml:"browserless"      json:"browserless"`
+	OnlyOffice      *OnlyOfficeConfig      `yaml:"onlyoffice"       json:"onlyoffice"`
 	StreamManager   *StreamManagerConfig   `yaml:"stream_manager"   json:"stream_manager"`
 	ExtractManager  *ExtractManagerConfig  `yaml:"extract"          json:"extract"`
 	WebSearch       *WebSearchConfig       `yaml:"web_search"       json:"web_search"`
@@ -48,6 +49,14 @@ type BrowserlessConfig struct {
 	ExternalURL string `yaml:"external_url" json:"external_url"`
 	Token       string `yaml:"token"        json:"token"`
 	MaxSessions int    `yaml:"max_sessions" json:"max_sessions"`
+}
+
+// OnlyOfficeConfig ONLYOFFICE DocumentServer configuration
+type OnlyOfficeConfig struct {
+	JWTSecret   string `yaml:"jwt_secret"   json:"jwt_secret"`
+	HMACSecret  string `yaml:"hmac_secret"  json:"hmac_secret"`
+	InternalURL string `yaml:"internal_url" json:"internal_url"`
+	ExternalURL string `yaml:"external_url" json:"external_url"`
 }
 
 type VectorDatabaseConfig struct {
