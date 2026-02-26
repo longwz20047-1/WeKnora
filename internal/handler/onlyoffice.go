@@ -339,12 +339,14 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 
 	// Status 4 = no changes, just acknowledge
 	if cb.Status == 4 {
+		logger.Infof(ctx, "[ONLYOFFICE] callback status=4 (no changes), key=%s", cb.Key)
 		c.JSON(http.StatusOK, gin.H{"error": 0})
 		return
 	}
 
 	// Only process status 2 (save after close) and 6 (force save)
 	if cb.Status != 2 && cb.Status != 6 {
+		logger.Infof(ctx, "[ONLYOFFICE] callback ignored: status=%d key=%s", cb.Status, cb.Key)
 		c.JSON(http.StatusOK, gin.H{"error": 0})
 		return
 	}
@@ -404,6 +406,8 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 
 	if saveErr != nil {
 		logger.Errorf(ctx, "[ONLYOFFICE] callback save failed for %s: %v", knowledgeID, saveErr)
+	} else {
+		logger.Infof(ctx, "[ONLYOFFICE] callback save succeeded for %s (status=%d)", knowledgeID, cb.Status)
 	}
 
 	// Status 2 = final save (all editors closed) → trigger re-parse to update chunks & vectors
