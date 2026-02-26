@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/Tencent/WeKnora/internal/config"
+	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
@@ -165,6 +167,10 @@ func (h *OnlyOfficeHandler) GetEditorConfig(c *gin.Context) {
 	}
 
 	canEdit := mode == "edit" && editableTypes[ext]
+	effectiveMode := mode
+	if !canEdit {
+		effectiveMode = "view"
+	}
 
 	hmacToken := secutils.GenerateHMACToken(
 		h.cfg.OnlyOffice.HMACSecret, knowledgeID, effectiveTenantID, 5*time.Minute,
@@ -190,7 +196,7 @@ func (h *OnlyOfficeHandler) GetEditorConfig(c *gin.Context) {
 		},
 		"documentType": docType,
 		"editorConfig": map[string]interface{}{
-			"mode":        mode,
+			"mode":        effectiveMode,
 			"callbackUrl": callbackURL,
 			"lang":        "zh",
 			"user": map[string]interface{}{
@@ -251,10 +257,12 @@ func (h *OnlyOfficeHandler) ServeFile(c *gin.Context) {
 
 	contentType := detectContentType(filename)
 	c.Header("Content-Type", contentType)
-	c.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
+	c.Header("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filename}))
 
 	c.Stream(func(w io.Writer) bool {
-		io.Copy(w, reader)
+		if _, err := io.Copy(w, reader); err != nil {
+			logger.Warnf(c.Request.Context(), "[ONLYOFFICE] file streaming error for %s: %v", knowledgeID, err)
+		}
 		return false
 	})
 }
@@ -282,19 +290,25 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 		return
 	}
 
-	// Verify ONLYOFFICE JWT (JWT_IN_BODY=true)
-	if cb.Token != "" {
-		parser := jwt.NewParser()
-		_, err := parser.Parse(cb.Token, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return []byte(h.cfg.OnlyOffice.JWTSecret), nil
-		})
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"error": 0})
-			return
+	ctx := c.Request.Context()
+
+	// Verify ONLYOFFICE JWT (JWT_IN_BODY=true) — mandatory
+	if cb.Token == "" {
+		logger.Warnf(ctx, "[ONLYOFFICE] callback rejected: missing JWT token, key=%s", cb.Key)
+		c.JSON(http.StatusOK, gin.H{"error": 0})
+		return
+	}
+	parser := jwt.NewParser()
+	_, err := parser.Parse(cb.Token, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
+		return []byte(h.cfg.OnlyOffice.JWTSecret), nil
+	})
+	if err != nil {
+		logger.Warnf(ctx, "[ONLYOFFICE] callback rejected: invalid JWT, key=%s err=%v", cb.Key, err)
+		c.JSON(http.StatusOK, gin.H{"error": 0})
+		return
 	}
 
 	// Status 4 = no changes, just acknowledge
@@ -315,9 +329,11 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 		knowledgeID = cb.Key[:idx]
 	}
 
-	ctx := c.Request.Context()
+	logger.Infof(ctx, "[ONLYOFFICE] callback received: status=%d key=%s", cb.Status, cb.Key)
+
 	knowledge, err := h.kgService.GetKnowledgeByIDOnly(ctx, knowledgeID)
 	if err != nil {
+		logger.Warnf(ctx, "[ONLYOFFICE] knowledge not found for callback: id=%s err=%v", knowledgeID, err)
 		c.JSON(http.StatusOK, gin.H{"error": 0})
 		return
 	}
@@ -353,7 +369,7 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 
 		if oldPath != "" && oldPath != newPath {
 			if delErr := h.fileSvc.DeleteFile(ctx, oldPath); delErr != nil {
-				_ = delErr // warn-level, don't block
+				logger.Warnf(ctx, "[ONLYOFFICE] failed to delete old file %s: %v", oldPath, delErr)
 			}
 		}
 
@@ -361,7 +377,7 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 	})
 
 	if saveErr != nil {
-		_ = saveErr // log error but always return success to ONLYOFFICE
+		logger.Errorf(ctx, "[ONLYOFFICE] callback save failed for %s: %v", knowledgeID, saveErr)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"error": 0})
