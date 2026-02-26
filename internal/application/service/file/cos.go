@@ -143,6 +143,28 @@ func (s *cosFileService) SaveBytes(ctx context.Context, data []byte, tenantID ui
 	return fmt.Sprintf("%s%s", s.bucketURL, objectName), nil
 }
 
+// OverwriteBytes writes data to an existing COS path, replacing its contents in-place.
+func (s *cosFileService) OverwriteBytes(ctx context.Context, data []byte, existingPath string) error {
+	reader := bytes.NewReader(data)
+
+	// Check if the file belongs to the temp bucket
+	if s.tempClient != nil && strings.HasPrefix(existingPath, s.tempBucketURL) {
+		objectName := strings.TrimPrefix(existingPath, s.tempBucketURL)
+		_, err := s.tempClient.Object.Put(ctx, objectName, reader, nil)
+		if err != nil {
+			return fmt.Errorf("failed to overwrite file in COS temp bucket: %w", err)
+		}
+		return nil
+	}
+
+	objectName := strings.TrimPrefix(existingPath, s.bucketURL)
+	_, err := s.client.Object.Put(ctx, objectName, reader, nil)
+	if err != nil {
+		return fmt.Errorf("failed to overwrite file in COS: %w", err)
+	}
+	return nil
+}
+
 // GetFileURL returns a presigned download URL for the file
 func (s *cosFileService) GetFileURL(ctx context.Context, filePath string) (string, error) {
 	// 判断文件属于哪个桶

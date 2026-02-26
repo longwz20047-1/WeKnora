@@ -138,6 +138,14 @@ func (s *localFileService) SaveBytes(ctx context.Context, data []byte, tenantID 
 	return filePath, nil
 }
 
+// OverwriteBytes writes data to an existing local file path, replacing its contents in-place.
+func (s *localFileService) OverwriteBytes(ctx context.Context, data []byte, existingPath string) error {
+	if err := os.WriteFile(existingPath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to overwrite file: %w", err)
+	}
+	return nil
+}
+
 // GetFileURL returns a download URL for the file
 // For local storage, returns the file path itself (no URL support)
 func (s *localFileService) GetFileURL(ctx context.Context, filePath string) (string, error) {

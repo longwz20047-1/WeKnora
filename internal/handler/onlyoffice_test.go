@@ -57,10 +57,17 @@ type mockFileService struct {
 	saveErr                error
 	deleteErr              error
 	deleted                string
+	overwriteErr           error
+	overwritten            string
 }
 
 func (m *mockFileService) SaveBytes(_ context.Context, _ []byte, _ uint64, _ string, _ bool) (string, error) {
 	return m.savePath, m.saveErr
+}
+
+func (m *mockFileService) OverwriteBytes(_ context.Context, _ []byte, path string) error {
+	m.overwritten = path
+	return m.overwriteErr
 }
 
 func (m *mockFileService) DeleteFile(_ context.Context, path string) error {

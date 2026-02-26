@@ -146,6 +146,25 @@ func (s *minioFileService) SaveBytes(ctx context.Context, data []byte, tenantID 
 	return fmt.Sprintf("minio://%s/%s", s.bucketName, objectName), nil
 }
 
+// OverwriteBytes writes data to an existing MinIO path, replacing its contents in-place.
+func (s *minioFileService) OverwriteBytes(ctx context.Context, data []byte, existingPath string) error {
+	if len(existingPath) < 9 || existingPath[:8] != "minio://" {
+		return fmt.Errorf("invalid MinIO file path: %s", existingPath)
+	}
+
+	objectName := existingPath[9+len(s.bucketName):]
+	if objectName[0] == '/' {
+		objectName = objectName[1:]
+	}
+
+	reader := bytes.NewReader(data)
+	_, err := s.client.PutObject(ctx, s.bucketName, objectName, reader, int64(len(data)), minio.PutObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to overwrite file in MinIO: %w", err)
+	}
+	return nil
+}
+
 // GetFileURL returns a presigned download URL for the file
 func (s *minioFileService) GetFileURL(ctx context.Context, filePath string) (string, error) {
 	// Parse MinIO path

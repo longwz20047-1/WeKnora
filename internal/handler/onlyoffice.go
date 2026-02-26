@@ -401,31 +401,25 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 			return fmt.Errorf("download callback file: %w", err)
 		}
 
-		newPath, err := h.fileSvc.SaveBytes(ctx, data, knowledge.TenantID, knowledge.FileName, false)
-		if err != nil {
-			return fmt.Errorf("save file: %w", err)
-		}
-
 		// Re-read to get latest FilePath (concurrent safety)
 		freshKnowledge, err := h.kgService.GetKnowledgeByIDOnly(ctx, knowledgeID)
 		if err != nil {
 			return fmt.Errorf("re-read knowledge: %w", err)
 		}
-		oldPath := freshKnowledge.FilePath
 
-		freshKnowledge.FilePath = newPath
+		// Overwrite the file at the existing path to preserve all cached references.
+		// Using SaveBytes would generate a new random path, breaking ONLYOFFICE's
+		// document cache and any in-flight file requests.
+		if err := h.fileSvc.OverwriteBytes(ctx, data, freshKnowledge.FilePath); err != nil {
+			return fmt.Errorf("overwrite file: %w", err)
+		}
+
 		freshKnowledge.FileSize = int64(len(data))
 		if cb.Status == 2 {
 			freshKnowledge.UpdatedAt = time.Now()
 		}
 		if err := h.kgService.UpdateKnowledge(ctx, freshKnowledge); err != nil {
 			return fmt.Errorf("update knowledge: %w", err)
-		}
-
-		if oldPath != "" && oldPath != newPath {
-			if delErr := h.fileSvc.DeleteFile(ctx, oldPath); delErr != nil {
-				logger.Warnf(ctx, "[ONLYOFFICE] failed to delete old file %s: %v", oldPath, delErr)
-			}
 		}
 
 		return nil

@@ -42,6 +42,11 @@ func (s *DummyFileService) SaveBytes(ctx context.Context, data []byte, tenantID 
 	return uuid.New().String(), nil
 }
 
+// OverwriteBytes is a no-op operation that always succeeds
+func (s *DummyFileService) OverwriteBytes(ctx context.Context, data []byte, existingPath string) error {
+	return nil
+}
+
 // GetFileURL returns the file path as URL (dummy implementation)
 func (s *DummyFileService) GetFileURL(ctx context.Context, filePath string) (string, error) {
 	return filePath, nil
