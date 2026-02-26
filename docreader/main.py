@@ -181,6 +181,10 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                     metadata={k: str(v) for k, v in result.metadata.items()} if result.metadata else {},
                 )
                 logger.info(f"Response size: {response.ByteSize()} bytes")
+                if result.metadata:
+                    logger.info(f"Document metadata keys: {list(result.metadata.keys())}")
+                if response.metadata:
+                    logger.info(f"gRPC response metadata: {dict(response.metadata)}")
                 return response
 
             except Exception as e:
