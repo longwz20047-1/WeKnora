@@ -720,9 +720,11 @@ func initOnlyOfficeConfig(cfg *config.Config) {
 		logger.Infof(context.Background(), "[Container] ONLYOFFICE not configured (ONLYOFFICE_JWT_SECRET not set)")
 		return
 	}
+	// ONLYOFFICE_INTERNAL_URL: the WeKnora app URL as seen from the ONLYOFFICE container
+	// ONLYOFFICE uses this to fetch documents and send save callbacks
 	internalURL := os.Getenv("ONLYOFFICE_INTERNAL_URL")
 	if internalURL == "" {
-		internalURL = "http://onlyoffice:80"
+		internalURL = "http://app:8080"
 	}
 	hmacSecret := os.Getenv("ONLYOFFICE_HMAC_SECRET")
 	if hmacSecret == "" {
