@@ -10,10 +10,12 @@ import (
 	"io"
 	"mime/multipart"
 	"net/url"
+	"os"
 	"regexp"
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -369,7 +371,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		return knowledge, nil
 	}
 
-	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3), asynq.Timeout(10*time.Minute))
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue document process task: %v", err)
@@ -513,7 +515,7 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 		return knowledge, nil
 	}
 
-	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3), asynq.Timeout(10*time.Minute))
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue URL process task: %v", err)
@@ -718,7 +720,7 @@ func (s *knowledgeService) createKnowledgeFromPassageInternal(ctx context.Contex
 			return knowledge, nil
 		}
 
-		task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+		task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3), asynq.Timeout(10*time.Minute))
 		info, err := s.task.Enqueue(task)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue passage process task: %v", err)
@@ -2595,7 +2597,7 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 			return existing, nil
 		}
 
-		task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+		task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3), asynq.Timeout(10*time.Minute))
 		info, err := s.task.Enqueue(task)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue reparse task: %v", err)
@@ -2643,7 +2645,7 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 			return existing, nil
 		}
 
-		task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+		task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3), asynq.Timeout(10*time.Minute))
 		info, err := s.task.Enqueue(task)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue URL reparse task: %v", err)
@@ -6812,6 +6814,17 @@ func IsImageType(fileType string) bool {
 	}
 }
 
+// getDocReaderTimeout returns the timeout duration for DocReader gRPC calls.
+// Configurable via DOCREADER_TIMEOUT env var (in seconds), default 5 minutes.
+func getDocReaderTimeout() time.Duration {
+	if s := os.Getenv("DOCREADER_TIMEOUT"); s != "" {
+		if sec, err := strconv.Atoi(s); err == nil && sec > 0 {
+			return time.Duration(sec) * time.Second
+		}
+	}
+	return 5 * time.Minute
+}
+
 // ProcessDocument handles Asynq document processing tasks
 func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) error {
 	var payload types.DocumentProcessPayload
@@ -6973,7 +6986,9 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 				kb.ChunkingConfig.ChunkSize, kb.ChunkingConfig.ChunkOverlap)
 		} else {
 			// DocReader 回退路径（Firecrawl 未配置时）
-			urlResp, err := s.docReaderClient.ReadFromURL(ctx, &proto.ReadFromURLRequest{
+			docReaderCtx, docReaderCancel := context.WithTimeout(ctx, getDocReaderTimeout())
+			defer docReaderCancel()
+			urlResp, err := s.docReaderClient.ReadFromURL(docReaderCtx, &proto.ReadFromURLRequest{
 				Url:   payload.URL,
 				Title: knowledge.Title,
 				ReadConfig: &proto.ReadConfig{
@@ -7044,7 +7059,9 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		}
 
 		// 调用docReader处理文件
-		fileResp, err := s.docReaderClient.ReadFromFile(ctx, &proto.ReadFromFileRequest{
+		docReaderCtx, docReaderCancel := context.WithTimeout(ctx, getDocReaderTimeout())
+		defer docReaderCancel()
+		fileResp, err := s.docReaderClient.ReadFromFile(docReaderCtx, &proto.ReadFromFileRequest{
 			FileContent: contentBytes,
 			FileName:    payload.FileName,
 			FileType:    payload.FileType,
@@ -8187,7 +8204,7 @@ func (s *knowledgeService) CreateKnowledgeFromExtracted(
 		return knowledge, nil
 	}
 
-	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3), asynq.Timeout(10*time.Minute))
 	if info, enqErr := s.task.Enqueue(task); enqErr != nil {
 		logger.Errorf(ctx, "CreateKnowledgeFromExtracted: enqueue failed: %v", enqErr)
 	} else {
@@ -8289,7 +8306,7 @@ func (s *knowledgeService) CreateKnowledgeFromImageBytes(
 		return knowledge, nil
 	}
 
-	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3), asynq.Timeout(10*time.Minute))
 	if info, enqErr := s.task.Enqueue(task); enqErr != nil {
 		logger.Errorf(ctx, "CreateKnowledgeFromImageBytes: enqueue failed: %v", enqErr)
 	} else {
@@ -8350,7 +8367,7 @@ func (s *knowledgeService) ReplaceKnowledgeContent(ctx context.Context, id, cont
 		return fmt.Errorf("ReplaceKnowledgeContent: marshal payload: %w", err)
 	}
 
-	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3), asynq.Timeout(10*time.Minute))
 	if _, enqErr := s.task.Enqueue(task); enqErr != nil {
 		return fmt.Errorf("ReplaceKnowledgeContent: enqueue: %w", enqErr)
 	}

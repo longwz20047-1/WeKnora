@@ -94,7 +94,7 @@ func (r *knowledgeRepository) ListPagedKnowledgeByKnowledgeBaseID(
 		}
 	}
 	if keyword != "" {
-		query = query.Where("file_name LIKE ?", "%"+keyword+"%")
+		query = query.Where("(file_name LIKE ? OR title LIKE ? OR description LIKE ?)", "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
 	}
 	if fileType != "" {
 		if fileType == "manual" {
@@ -122,7 +122,7 @@ func (r *knowledgeRepository) ListPagedKnowledgeByKnowledgeBaseID(
 		}
 	}
 	if keyword != "" {
-		dataQuery = dataQuery.Where("file_name LIKE ?", "%"+keyword+"%")
+		dataQuery = dataQuery.Where("(file_name LIKE ? OR title LIKE ? OR description LIKE ?)", "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
 	}
 	if fileType != "" {
 		if fileType == "manual" {
@@ -343,9 +343,9 @@ func (r *knowledgeRepository) SearchKnowledge(
 		Where("knowledge_bases.type = ?", types.KnowledgeBaseTypeDocument).
 		Where("knowledges.deleted_at IS NULL")
 
-	// If keyword is provided, filter by file_name or title
+	// If keyword is provided, filter by file_name, title or description
 	if keyword != "" {
-		query = query.Where("knowledges.file_name LIKE ? ", "%"+keyword+"%")
+		query = query.Where("(knowledges.file_name LIKE ? OR knowledges.title LIKE ? OR knowledges.description LIKE ?)", "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
 	}
 
 	// If fileTypes is provided, filter by file extension
@@ -456,7 +456,7 @@ func (r *knowledgeRepository) SearchKnowledgeInScopes(
 		Where("knowledges.deleted_at IS NULL")
 
 	if keyword != "" {
-		query = query.Where("knowledges.file_name LIKE ?", "%"+keyword+"%")
+		query = query.Where("(knowledges.file_name LIKE ? OR knowledges.title LIKE ? OR knowledges.description LIKE ?)", "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
 	}
 
 	if len(fileTypes) > 0 {
