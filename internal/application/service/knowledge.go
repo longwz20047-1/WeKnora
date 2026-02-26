@@ -7081,7 +7081,6 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		chunks = fileResp.Chunks
 
 		// Extract pdf_preview_path from DocReader response metadata and save to Knowledge
-		logger.Infof(ctx, "DocReader response metadata: %v (nil=%v)", fileResp.Metadata, fileResp.Metadata == nil)
 		if fileResp.Metadata != nil {
 			if pdfPath, ok := fileResp.Metadata["pdf_preview_path"]; ok && pdfPath != "" {
 				logger.Infof(ctx, "DocReader returned pdf_preview_path: %s for knowledge: %s", pdfPath, knowledge.ID)
