@@ -73,6 +73,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// Core infrastructure configuration
 	logger.Debugf(ctx, "[Container] Registering core infrastructure...")
 	must(container.Provide(config.LoadConfig))
+	must(container.Invoke(initOnlyOfficeConfig))
 	must(container.Provide(initTracer))
 	must(container.Provide(initDatabase))
 	must(container.Provide(initFileService))
@@ -708,4 +709,25 @@ func registerWebSearchProviders(registry *web_search.Registry) {
 	registry.Register(web_search.BingProviderInfo(), func() (interfaces.WebSearchProvider, error) {
 		return web_search.NewBingProvider()
 	})
+}
+
+// initOnlyOfficeConfig initializes ONLYOFFICE config from environment variables.
+// If ONLYOFFICE_JWT_SECRET is not set, cfg.OnlyOffice remains nil (feature disabled).
+func initOnlyOfficeConfig(cfg *config.Config) {
+	jwtSecret := os.Getenv("ONLYOFFICE_JWT_SECRET")
+	if jwtSecret == "" {
+		logger.Infof(context.Background(), "[Container] ONLYOFFICE not configured (ONLYOFFICE_JWT_SECRET not set)")
+		return
+	}
+	internalURL := os.Getenv("ONLYOFFICE_INTERNAL_URL")
+	if internalURL == "" {
+		internalURL = "http://onlyoffice:80"
+	}
+	cfg.OnlyOffice = &config.OnlyOfficeConfig{
+		JWTSecret:   jwtSecret,
+		HMACSecret:  os.Getenv("ONLYOFFICE_HMAC_SECRET"),
+		InternalURL: internalURL,
+		ExternalURL: os.Getenv("ONLYOFFICE_EXTERNAL_URL"),
+	}
+	logger.Infof(context.Background(), "[Container] ONLYOFFICE configured (internal: %s)", internalURL)
 }
