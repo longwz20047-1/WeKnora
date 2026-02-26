@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -740,7 +742,7 @@ func (h *KnowledgeHandler) DownloadKnowledgeFile(c *gin.Context) {
 	if format == "pdf" {
 		c.Header("Content-Type", "application/pdf")
 	} else {
-		c.Header("Content-Type", "application/octet-stream")
+		c.Header("Content-Type", detectContentType(filename))
 	}
 	c.Header("Expires", "0")
 	c.Header("Cache-Control", "must-revalidate")
@@ -1270,4 +1272,18 @@ func (h *KnowledgeHandler) SearchKnowledge(c *gin.Context) {
 		"data":     knowledges,
 		"has_more": hasMore,
 	})
+}
+
+// detectContentType returns the MIME type for a filename based on its extension.
+// Falls back to application/octet-stream for unknown types.
+func detectContentType(filename string) string {
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		return "application/octet-stream"
+	}
+	ct := mime.TypeByExtension(ext)
+	if ct == "" {
+		return "application/octet-stream"
+	}
+	return ct
 }
