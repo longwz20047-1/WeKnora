@@ -1120,6 +1120,11 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 
 	ctx, span := tracing.ContextWithSpan(ctx, "knowledgeService.processChunks")
 	defer span.End()
+
+	// Ensure ONLYOFFICE deferred-reparse flag is checked on any exit path.
+	// On success (ParseStatusCompleted), it triggers reparse; on failure, it just clears the flag.
+	defer s.checkAndTriggerDeferredReparse(ctx, knowledge)
+
 	span.SetAttributes(
 		attribute.Int("tenant_id", int(knowledge.TenantID)),
 		attribute.String("knowledge_base_id", knowledge.KnowledgeBaseID),
@@ -1520,6 +1525,10 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		logger.GetLogger(ctx).WithField("error", err).Errorf("processChunks update knowledge failed")
 	}
 
+	// Check if ONLYOFFICE edits were saved while this document was being parsed.
+	// Must run BEFORE enqueueing question/summary tasks to avoid wasted work on stale content.
+	s.checkAndTriggerDeferredReparse(ctx, knowledge)
+
 	// Enqueue question generation task if enabled (async, non-blocking)
 	if options.EnableQuestionGeneration && len(textChunks) > 0 {
 		questionCount := options.QuestionCount
@@ -1543,10 +1552,6 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		logger.GetLogger(ctx).WithField("error", err).Errorf("processChunks update tenant storage used failed")
 	}
 	logger.GetLogger(ctx).Infof("processChunks successfully")
-
-	// Check if ONLYOFFICE edits were saved while this document was being parsed.
-	// If so, auto-trigger a reparse so chunks/vectors reflect the latest file content.
-	s.checkAndTriggerDeferredReparse(ctx, knowledge)
 }
 
 // ---------------------------------------------------------------------------
@@ -1593,6 +1598,9 @@ func (s *knowledgeService) processMetadataOnlyChunks(
 	knowledge *types.Knowledge,
 	metadataText string,
 ) {
+	// Ensure ONLYOFFICE deferred-reparse flag is checked on any exit path.
+	defer s.checkAndTriggerDeferredReparse(ctx, knowledge)
+
 	// Helper to mark knowledge as failed.
 	markFailed := func(reason string) {
 		knowledge.ParseStatus = types.ParseStatusFailed
@@ -1700,14 +1708,12 @@ func (s *knowledgeService) processMetadataOnlyChunks(
 	}
 
 	logger.Infof(ctx, "processMetadataOnlyChunks: successfully processed store_preview knowledge %s", knowledge.ID)
-
-	// Check if ONLYOFFICE edits were saved while this document was being parsed.
-	s.checkAndTriggerDeferredReparse(ctx, knowledge)
 }
 
 // checkAndTriggerDeferredReparse checks if ONLYOFFICE edits were saved while
-// the document was being parsed. If so, it triggers a reparse in a goroutine
-// so the chunks/vectors reflect the latest file content.
+// the document was being parsed. If the flag exists, it is always consumed (GetDel).
+// A reparse is only triggered if parse completed successfully; on failure the flag
+// is simply cleared so it doesn't linger until TTL expiry.
 func (s *knowledgeService) checkAndTriggerDeferredReparse(ctx context.Context, knowledge *types.Knowledge) {
 	if s.redisClient == nil {
 		return
@@ -1717,14 +1723,19 @@ func (s *knowledgeService) checkAndTriggerDeferredReparse(ctx context.Context, k
 	if err != nil || val != "1" {
 		return
 	}
-	logger.Infof(ctx, "[processChunks] ONLYOFFICE edit detected during parsing, scheduling reparse for %s", knowledge.ID)
+	// Only trigger reparse if current processing completed successfully
+	if knowledge.ParseStatus != types.ParseStatusCompleted {
+		logger.Infof(ctx, "[ONLYOFFICE] edit-during-parse flag cleared for %s (parse_status=%s, not triggering reparse)", knowledge.ID, knowledge.ParseStatus)
+		return
+	}
+	logger.Infof(ctx, "[ONLYOFFICE] edit detected during parsing, scheduling reparse for %s", knowledge.ID)
 	go func() {
 		reparseCtx := context.WithValue(context.Background(), types.TenantIDContextKey, knowledge.TenantID)
 		if tenantInfo := ctx.Value(types.TenantInfoContextKey); tenantInfo != nil {
 			reparseCtx = context.WithValue(reparseCtx, types.TenantInfoContextKey, tenantInfo)
 		}
 		if _, reparseErr := s.ReparseKnowledge(reparseCtx, knowledge.ID); reparseErr != nil {
-			logger.Warnf(reparseCtx, "[processChunks] auto-reparse failed for %s: %v", knowledge.ID, reparseErr)
+			logger.Warnf(reparseCtx, "[ONLYOFFICE] auto-reparse failed for %s: %v", knowledge.ID, reparseErr)
 		}
 	}()
 }

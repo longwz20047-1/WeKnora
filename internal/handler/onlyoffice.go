@@ -416,7 +416,9 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 			if knowledge.ParseStatus == types.ParseStatusPending || knowledge.ParseStatus == types.ParseStatusProcessing {
 				if h.redis != nil {
 					editedKey := fmt.Sprintf("onlyoffice:edited-during-parse:%s", knowledgeID)
-					h.redis.Set(ctx, editedKey, "1", 1*time.Hour)
+					if err := h.redis.Set(ctx, editedKey, "1", 1*time.Hour).Err(); err != nil {
+						logger.Warnf(ctx, "[ONLYOFFICE] failed to set edited-during-parse flag for %s: %v", knowledgeID, err)
+					}
 				}
 				logger.Infof(ctx, "[ONLYOFFICE] reparse deferred for %s on status 4 (parse_status=%s)", knowledgeID, knowledge.ParseStatus)
 			} else if _, reparseErr := h.kgService.ReparseKnowledge(ctx, knowledgeID); reparseErr != nil {
@@ -523,7 +525,9 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 			// Document is currently being parsed — defer reparse until processing completes
 			if h.redis != nil {
 				editedKey := fmt.Sprintf("onlyoffice:edited-during-parse:%s", knowledgeID)
-				h.redis.Set(ctx, editedKey, "1", 1*time.Hour)
+				if err := h.redis.Set(ctx, editedKey, "1", 1*time.Hour).Err(); err != nil {
+					logger.Warnf(ctx, "[ONLYOFFICE] failed to set edited-during-parse flag for %s: %v", knowledgeID, err)
+				}
 			}
 			logger.Infof(ctx, "[ONLYOFFICE] file saved for %s but reparse deferred (parse_status=%s)", knowledgeID, freshKnowledge.ParseStatus)
 		} else {
