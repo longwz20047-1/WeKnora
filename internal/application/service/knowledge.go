@@ -1543,6 +1543,10 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		logger.GetLogger(ctx).WithField("error", err).Errorf("processChunks update tenant storage used failed")
 	}
 	logger.GetLogger(ctx).Infof("processChunks successfully")
+
+	// Check if ONLYOFFICE edits were saved while this document was being parsed.
+	// If so, auto-trigger a reparse so chunks/vectors reflect the latest file content.
+	s.checkAndTriggerDeferredReparse(ctx, knowledge)
 }
 
 // ---------------------------------------------------------------------------
@@ -1696,6 +1700,33 @@ func (s *knowledgeService) processMetadataOnlyChunks(
 	}
 
 	logger.Infof(ctx, "processMetadataOnlyChunks: successfully processed store_preview knowledge %s", knowledge.ID)
+
+	// Check if ONLYOFFICE edits were saved while this document was being parsed.
+	s.checkAndTriggerDeferredReparse(ctx, knowledge)
+}
+
+// checkAndTriggerDeferredReparse checks if ONLYOFFICE edits were saved while
+// the document was being parsed. If so, it triggers a reparse in a goroutine
+// so the chunks/vectors reflect the latest file content.
+func (s *knowledgeService) checkAndTriggerDeferredReparse(ctx context.Context, knowledge *types.Knowledge) {
+	if s.redisClient == nil {
+		return
+	}
+	editedKey := fmt.Sprintf("onlyoffice:edited-during-parse:%s", knowledge.ID)
+	val, err := s.redisClient.GetDel(ctx, editedKey).Result()
+	if err != nil || val != "1" {
+		return
+	}
+	logger.Infof(ctx, "[processChunks] ONLYOFFICE edit detected during parsing, scheduling reparse for %s", knowledge.ID)
+	go func() {
+		reparseCtx := context.WithValue(context.Background(), types.TenantIDContextKey, knowledge.TenantID)
+		if tenantInfo := ctx.Value(types.TenantInfoContextKey); tenantInfo != nil {
+			reparseCtx = context.WithValue(reparseCtx, types.TenantInfoContextKey, tenantInfo)
+		}
+		if _, reparseErr := s.ReparseKnowledge(reparseCtx, knowledge.ID); reparseErr != nil {
+			logger.Warnf(reparseCtx, "[processChunks] auto-reparse failed for %s: %v", knowledge.ID, reparseErr)
+		}
+	}()
 }
 
 // GetSummary generates a summary for knowledge content using an AI model
@@ -2501,6 +2532,12 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 	if err != nil {
 		logger.Errorf(ctx, "Failed to load knowledge: %v", err)
 		return nil, err
+	}
+
+	// Skip if document is already pending or being processed to prevent duplicate tasks
+	if existing.ParseStatus == types.ParseStatusPending || existing.ParseStatus == types.ParseStatusProcessing {
+		logger.Infof(ctx, "Skipping reparse: knowledge %s already has parse_status=%s", knowledgeID, existing.ParseStatus)
+		return existing, nil
 	}
 
 	// Get knowledge base configuration

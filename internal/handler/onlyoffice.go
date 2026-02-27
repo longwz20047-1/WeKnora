@@ -189,6 +189,12 @@ func (h *OnlyOfficeHandler) GetEditorConfig(c *gin.Context) {
 	// Use knowledge owner's tenant for file access (handles shared KB)
 	effectiveTenantID := knowledge.TenantID
 
+	// Prevent editing while document is being parsed to avoid file corruption
+	if mode == "edit" && (knowledge.ParseStatus == types.ParseStatusPending || knowledge.ParseStatus == types.ParseStatusProcessing) {
+		logger.Infof(ctx, "[ONLYOFFICE] downgrading edit to view: knowledge %s has parse_status=%s", knowledgeID, knowledge.ParseStatus)
+		mode = "view"
+	}
+
 	ext := strings.TrimPrefix(filepath.Ext(knowledge.FileName), ".")
 	ext = strings.ToLower(ext)
 	docType, ok := docTypeMap[ext]
@@ -406,7 +412,14 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 			if err := h.kgService.UpdateKnowledge(ctx, knowledge); err != nil {
 				logger.Warnf(ctx, "[ONLYOFFICE] failed to update knowledge for status 4: %v", err)
 			}
-			if _, reparseErr := h.kgService.ReparseKnowledge(ctx, knowledgeID); reparseErr != nil {
+			// Defer reparse if document is currently being parsed
+			if knowledge.ParseStatus == types.ParseStatusPending || knowledge.ParseStatus == types.ParseStatusProcessing {
+				if h.redis != nil {
+					editedKey := fmt.Sprintf("onlyoffice:edited-during-parse:%s", knowledgeID)
+					h.redis.Set(ctx, editedKey, "1", 1*time.Hour)
+				}
+				logger.Infof(ctx, "[ONLYOFFICE] reparse deferred for %s on status 4 (parse_status=%s)", knowledgeID, knowledge.ParseStatus)
+			} else if _, reparseErr := h.kgService.ReparseKnowledge(ctx, knowledgeID); reparseErr != nil {
 				logger.Warnf(ctx, "[ONLYOFFICE] reparse failed for %s on status 4: %v", knowledgeID, reparseErr)
 			} else {
 				logger.Infof(ctx, "[ONLYOFFICE] reparse queued for %s after document close (status 4, dirty)", knowledgeID)
@@ -497,14 +510,28 @@ func (h *OnlyOfficeHandler) HandleCallback(c *gin.Context) {
 
 	// Status 2 = final save (all editors closed) → trigger re-parse to update chunks & vectors
 	if saveErr == nil && cb.Status == 2 {
-		// Clear dirty flag since we're reparsing now
+		// Clear dirty flag since we're handling reparse now
 		if h.redis != nil {
 			h.redis.Del(ctx, fmt.Sprintf("onlyoffice:dirty:%s", knowledgeID))
 		}
-		if _, reparseErr := h.kgService.ReparseKnowledge(ctx, knowledgeID); reparseErr != nil {
-			logger.Warnf(ctx, "[ONLYOFFICE] reparse failed for %s: %v", knowledgeID, reparseErr)
+
+		// Re-read knowledge to get current parse_status
+		freshKnowledge, err := h.kgService.GetKnowledgeByIDOnly(ctx, knowledgeID)
+		if err != nil {
+			logger.Warnf(ctx, "[ONLYOFFICE] failed to re-read knowledge for reparse check: %v", err)
+		} else if freshKnowledge.ParseStatus == types.ParseStatusPending || freshKnowledge.ParseStatus == types.ParseStatusProcessing {
+			// Document is currently being parsed — defer reparse until processing completes
+			if h.redis != nil {
+				editedKey := fmt.Sprintf("onlyoffice:edited-during-parse:%s", knowledgeID)
+				h.redis.Set(ctx, editedKey, "1", 1*time.Hour)
+			}
+			logger.Infof(ctx, "[ONLYOFFICE] file saved for %s but reparse deferred (parse_status=%s)", knowledgeID, freshKnowledge.ParseStatus)
 		} else {
-			logger.Infof(ctx, "[ONLYOFFICE] reparse queued for %s after final save", knowledgeID)
+			if _, reparseErr := h.kgService.ReparseKnowledge(ctx, knowledgeID); reparseErr != nil {
+				logger.Warnf(ctx, "[ONLYOFFICE] reparse failed for %s: %v", knowledgeID, reparseErr)
+			} else {
+				logger.Infof(ctx, "[ONLYOFFICE] reparse queued for %s after final save", knowledgeID)
+			}
 		}
 	}
 
