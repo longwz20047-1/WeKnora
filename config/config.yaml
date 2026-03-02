@@ -169,7 +169,7 @@ conversation:
   summary:
     repeat_penalty: 1.0
     temperature: 0.3
-    max_completion_tokens: 2048
+    max_completion_tokens: 8192
     no_match_prefix: |-
       <think>
       </think>
