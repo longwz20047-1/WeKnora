@@ -8,8 +8,10 @@
 
 ### SSH 连接
 
+密钥文件已保存在本地 `~/.ssh/bt_key`（由宝塔面板生成的 ED25519 密钥），可直接连接：
+
 ```bash
-# 使用宝塔面板生成的密钥连接（root 用户）
+# 直接连接（密钥已就绪）
 ssh -o StrictHostKeyChecking=no -i ~/.ssh/bt_key root@192.168.100.30
 
 # 变量简写（后续命令中使用）
@@ -17,8 +19,8 @@ SSH="ssh -o StrictHostKeyChecking=no -i ~/.ssh/bt_key root@192.168.100.30"
 ```
 
 **注意事项**：
-- 密钥文件 `~/.ssh/bt_key` 必须是 Unix 换行符（LF），Windows 换行符（CRLF）会导致 `error in libcrypto`
-- 修复方式：`sed -i 's/\r$//' ~/.ssh/bt_key`
+- 密钥文件路径：`C:\Users\yaowenlong\.ssh\bt_key`（即 `~/.ssh/bt_key`）
+- 密钥必须是 Unix 换行符（LF），Windows 换行符（CRLF）会导致 `error in libcrypto`，修复：`sed -i 's/\r$//' ~/.ssh/bt_key`
 - 用户为 `root`（宝塔面板管理），不是 `yaowenlong`
 
 ### Docker 容器
