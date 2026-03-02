@@ -8,7 +8,7 @@ conversation:
   max_rounds: 5
   keyword_threshold: 0.3
   embedding_top_k: 10
-  vector_threshold: 0.3
+  vector_threshold: 0.5
   rerank_threshold: 0.5
   rerank_top_k: 5
   fallback_strategy: "model"
