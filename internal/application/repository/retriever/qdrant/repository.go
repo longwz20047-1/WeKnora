@@ -629,7 +629,7 @@ func (q *qdrantRepository) KeywordsRetrieve(ctx context.Context,
 
 	// Tokenize query for OR-based search (better for Chinese and multi-word queries)
 	queryTokens := tokenizeQuery(params.Query)
-	log.Debugf("[Qdrant] Tokenized query into %d tokens: %v", len(queryTokens), queryTokens)
+	log.Infof("[Qdrant] Tokenized query into %d tokens: %v (kb_ids: %v)", len(queryTokens), queryTokens, params.KnowledgeBaseIDs)
 
 	// Search in all matching collections
 	for _, collectionName := range collections {

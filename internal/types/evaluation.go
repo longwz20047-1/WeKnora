@@ -2,13 +2,35 @@ package types
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/yanyiwu/gojieba"
 )
 
-// Jieba is a global instance of Chinese text segmentation tool
-var Jieba *gojieba.Jieba = gojieba.NewJieba()
+// SafeJieba wraps gojieba.Jieba with a mutex to ensure thread-safety.
+// gojieba has known concurrency issues (see https://github.com/yanyiwu/gojieba/issues/48).
+type SafeJieba struct {
+	jieba *gojieba.Jieba
+	mu    sync.Mutex
+}
+
+// CutForSearch performs search-mode segmentation with mutex protection.
+func (s *SafeJieba) CutForSearch(sentence string, hmm bool) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jieba.CutForSearch(sentence, hmm)
+}
+
+// Cut performs segmentation with mutex protection.
+func (s *SafeJieba) Cut(sentence string, hmm bool) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jieba.Cut(sentence, hmm)
+}
+
+// Jieba is a global thread-safe instance of Chinese text segmentation tool
+var Jieba = &SafeJieba{jieba: gojieba.NewJieba()}
 
 // EvaluationStatue represents the status of an evaluation task
 type EvaluationStatue int

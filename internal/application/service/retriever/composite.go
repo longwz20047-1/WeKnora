@@ -129,7 +129,8 @@ func (c *CompositeRetrieveEngine) BatchUpdateChunkTagID(
 }
 
 // concurrentRetrieve is a helper function for concurrent processing of retrieval parameters
-// and collecting results
+// and collecting results. It collects partial results even if some goroutines fail,
+// only returning an error when ALL goroutines fail.
 func concurrentRetrieve(
 	ctx context.Context,
 	retrieveParams []types.RetrieveParams,
@@ -146,6 +147,7 @@ func concurrentRetrieve(
 		go func() {
 			defer wg.Done()
 			if err := fn(ctx, p, &results, &mu); err != nil {
+				logger.Warnf(ctx, "concurrentRetrieve: retriever %s failed: %v", p.RetrieverType, err)
 				errCh <- err
 			}
 		}()
@@ -154,11 +156,26 @@ func concurrentRetrieve(
 	wg.Wait()
 	close(errCh)
 
-	// Check for errors
+	// Collect all errors
+	var errs []error
 	for err := range errCh {
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
 		}
+	}
+
+	// Return partial results if we have any, even if some goroutines failed
+	if len(results) > 0 {
+		if len(errs) > 0 {
+			logger.Warnf(ctx, "concurrentRetrieve: %d/%d retrievers failed, returning %d partial results",
+				len(errs), len(retrieveParams), len(results))
+		}
+		return results, nil
+	}
+
+	// All failed — return the first error
+	if len(errs) > 0 {
+		return nil, errs[0]
 	}
 
 	return results, nil
