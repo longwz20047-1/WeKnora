@@ -1613,14 +1613,20 @@ func (h *InitializationHandler) checkRemoteModelConnection(ctx context.Context,
 	// 使用聊天实例进行测试
 	_, err = chatInstance.Chat(ctx, testMessages, testOptions)
 	if err != nil {
+		errMsg := err.Error()
+		// vLLM 在输出达到 max_tokens 限制时返回 429（而非标准的 finish_reason: "length"），
+		// 对于连接测试来说，能触发模型生成就说明连接正常
+		if strings.Contains(errMsg, "429") && strings.Contains(errMsg, "max_tokens") {
+			return true, "连接正常，模型可用"
+		}
 		// 根据错误类型返回不同的错误信息
-		if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "unauthorized") {
+		if strings.Contains(errMsg, "401") || strings.Contains(errMsg, "unauthorized") {
 			return false, "认证失败，请检查API Key"
-		} else if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "forbidden") {
-			return false, "权限不足，请检查API Key权限：" + err.Error()
-		} else if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+		} else if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "forbidden") {
+			return false, "权限不足，请检查API Key权限：" + errMsg
+		} else if strings.Contains(errMsg, "404") || strings.Contains(errMsg, "not found") {
 			return false, "API端点不存在，请检查Base URL"
-		} else if strings.Contains(err.Error(), "timeout") {
+		} else if strings.Contains(errMsg, "timeout") {
 			return false, "连接超时，请检查网络连接"
 		} else {
 			return false, fmt.Sprintf("连接失败: %v", err)
