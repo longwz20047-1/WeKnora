@@ -665,6 +665,7 @@ func (e *elasticsearchRepository) CopyIndices(ctx context.Context,
 				KnowledgeBaseID:      targetKnowledgeBaseID,
 				KnowledgeTitle:       sourceDoc.Title,
 				KnowledgeDescription: sourceDoc.Description,
+				IsEnabled:            sourceDoc.IsEnabled,
 			}
 
 			indexInfoList = append(indexInfoList, indexInfo)
