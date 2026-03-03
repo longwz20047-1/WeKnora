@@ -44,6 +44,13 @@
 - ES 引擎收到 `retrieverTypes=[keywords]` → `KVHybridRetrieveEngineService` 跳过 embedding 生成，只存文本（content + title + description）
 - Qdrant 引擎收到 `retrieverTypes=[vector]` → 生成 embedding 并存储向量
 
+**索引错误处理**：`CompositeRetrieveEngine` 的索引路径（`composite.go`）并发调用各引擎。
+如果某个引擎索引失败（如 ES 不可用），当前行为是**整体返回错误**，上层会重试或标记文档处理失败。
+这意味着 ES 故障可能阻塞文档索引（即使 Qdrant 成功了）。可接受的理由：
+- 索引是低频操作（文档上传时），不影响在线查询
+- 部分成功会导致数据不一致（ES 中缺少文档，但 Qdrant 中有），不如整体失败后重试
+- 如需更强容错，可考虑后续增加异步重试队列
+
 ### 标题/摘要搜索的数据流
 
 **当前（仅搜 content）：**
@@ -221,11 +228,11 @@ embeddingDB := elasticsearchRetriever.ToDBVectorEmbedding(embedding, additionalP
 // Embedding 字段已加 omitempty，空值不会序列化到 ES
 ```
 
-#### 5b. 修复 `.keyword` 后缀不兼容问题
+#### 5b. `.keyword` 兼容性处理（multi-field mapping 方案）
 
 **问题**：现有代码中 11 处查询使用 `.keyword` 后缀（如 `chunk_id.keyword`），这是因为当前 ES 使用动态 mapping，
-`text` 类型字段会自动生成 `.keyword` 子字段。但本方案的显式 mapping 将这些字段直接定义为 `"type": "keyword"`，
-此时不存在 `.keyword` 子字段，**所有过滤/删除/更新操作会静默返回零结果**。
+`text` 类型字段会自动生成 `.keyword` 子字段。本方案的显式 mapping 将这些字段直接定义为 `"type": "keyword"`，
+如果不做处理，不存在 `.keyword` 子字段，**所有过滤/删除/更新操作会静默返回零结果**。
 
 **涉及行数**（共 11 处）：
 
@@ -240,32 +247,37 @@ embeddingDB := elasticsearchRetriever.ToDBVectorEmbedding(embedding, additionalP
 行 283:  chunk_id.keyword        (getBaseConds - exclude)
 行 645:  chunk_id.keyword        (BatchUpdateChunkEnabledStatus - enabled)
 行 671:  chunk_id.keyword        (BatchUpdateChunkEnabledStatus - disabled)
-行 720:  chunk_id.keyword        (UpdateChunkContent)
+行 720:  chunk_id.keyword        (BatchUpdateChunkTagID)
 ```
 
-**修复**：将所有 `.keyword` 后缀去掉，直接使用字段名：
+**修复**（multi-field 方案）：在显式 mapping 中使用 `multi-field` 定义，**同时保留 `field` 和 `field.keyword` 两种访问方式**，
+这样无需修改 repository.go 中的 11 处 `.keyword` 引用，对 `elasticsearch_v8` 旧索引（动态 mapping）也完全兼容。
 
-```go
-// 修改前:
-"chunk_id.keyword": chunkIDList
-"source_id.keyword": sourceIDList
-"knowledge_base_id.keyword": params.KnowledgeBaseIDs
+具体做法：在 mapping 中将 `chunk_id`、`source_id` 等字段定义为 `keyword` 类型 + `.keyword` 子字段（指向自身），
+或者反过来——保持 `.keyword` 引用不变，在 mapping 中添加 `multi-field`：
 
-// 修改后:
-"chunk_id": chunkIDList
-"source_id": sourceIDList
-"knowledge_base_id": params.KnowledgeBaseIDs
+```json
+"chunk_id": {
+    "type": "keyword",
+    "fields": {
+        "keyword": { "type": "keyword" }
+    }
+}
 ```
 
-> **兼容性注意**：此改动也会影响 `elasticsearch_v8` 驱动。如果有使用动态 mapping 创建的旧 ES 索引，
-> 去掉 `.keyword` 后缀对 `keyword` 子字段的查询会失效。
-> 解决方案：`qdrant_es` 是全新部署，不存在旧索引问题；`elasticsearch_v8` 用户需要重建索引。
-> 或者在 mapping 中使用 `multi-field` 定义同时保留两种访问方式（见下方 mapping 设计）。
+这样 `chunk_id` 和 `chunk_id.keyword` **都能正确查询**，无论是显式 mapping 还是动态 mapping 创建的索引。
+
+> **之前的方案**（直接去掉 `.keyword` 后缀）风险过高：`repository.go` 中的 11 处 `.keyword` 引用
+> 被 `qdrant_es` 和 `elasticsearch_v8` 共享。去掉后缀会导致使用动态 mapping 的旧 `elasticsearch_v8` 索引
+> **静默返回零结果**（不报错），比报错更危险。multi-field 方案零改动 repository.go，完全向后兼容。
+
+**代码改动**：`.keyword` 后缀**保持不变**，只需在 `createIndexIfNotExists` 的 mapping 中为每个 keyword 字段添加 `.keyword` 子字段（见下方 5c 节 mapping 设计）。
 
 #### 5c. 修改 `createIndexIfNotExists` 配置中文分析器 + 标题/摘要字段
 
 mapping 包含 `title` 和 `description` 字段，使用与 `content` 相同的 CJK 分析器。
 不包含 `embedding`（dense_vector）字段——`qdrant_es` 模式下 ES 只做关键词搜索。
+所有 keyword 类型字段使用 multi-field 定义，保留 `.keyword` 子字段以兼容现有 repository.go 代码。
 
 > **重要**：`qdrant_es` 和 `elasticsearch_v8` 应使用不同的索引名称（`ELASTICSEARCH_INDEX`），
 > 因为 `qdrant_es` 的 mapping 不含 `embedding` 字段，如果 `elasticsearch_v8` 复用同一索引，
@@ -287,6 +299,8 @@ func (e *elasticsearchRepository) createIndexIfNotExists(ctx context.Context) er
 
     indexBody := strings.NewReader(`{
         "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0,
             "analysis": {
                 "analyzer": {
                     "content_analyzer": {
@@ -320,22 +334,27 @@ func (e *elasticsearchRepository) createIndexIfNotExists(ctx context.Context) er
                     "search_analyzer": "content_search_analyzer"
                 },
                 "source_id": {
-                    "type": "keyword"
+                    "type": "keyword",
+                    "fields": { "keyword": { "type": "keyword" } }
                 },
                 "source_type": {
                     "type": "integer"
                 },
                 "chunk_id": {
-                    "type": "keyword"
+                    "type": "keyword",
+                    "fields": { "keyword": { "type": "keyword" } }
                 },
                 "knowledge_id": {
-                    "type": "keyword"
+                    "type": "keyword",
+                    "fields": { "keyword": { "type": "keyword" } }
                 },
                 "knowledge_base_id": {
-                    "type": "keyword"
+                    "type": "keyword",
+                    "fields": { "keyword": { "type": "keyword" } }
                 },
                 "tag_id": {
-                    "type": "keyword"
+                    "type": "keyword",
+                    "fields": { "keyword": { "type": "keyword" } }
                 },
                 "is_enabled": {
                     "type": "boolean"
@@ -440,7 +459,46 @@ indexInfo := &typesLocal.IndexInfo{
 | `knowledge.go` | 1664 | `processMetadataOnlyChunks` 元数据 chunk | 函数参数 `knowledge` |
 | `knowledge.go` | 2055 | `indexSummaryChunk` 摘要 chunk | 函数参数 `knowledge` |
 | `knowledge.go` | 2222 | `indexGeneratedQuestions` 生成问题 | 函数参数 `knowledge` |
-| `extract.go` | 483 | `indexToVectorDB` 数据表 chunk | 需确认：函数接收 chunks 但可能不持有 knowledge，需查上层调用 |
+| `extract.go` | 483 | `indexToVectorDB` 数据表 chunk | 函数只接收 `chunks` 切片，不持有 `knowledge` 对象。需要从 chunks 中提取 KnowledgeID 批量查询 |
+
+**`extract.go:483`（indexToVectorDB）处理方式**：
+
+`indexToVectorDB` 的函数签名为 `func (s *DataTableSummaryService) indexToVectorDB(ctx, chunks, engine, embedder)`，
+不持有 `knowledge` 对象。建议修改函数签名增加 `knowledgeTitle` 和 `knowledgeDescription` 参数，
+由调用方（已持有 knowledge 上下文）传入：
+
+```go
+func (s *DataTableSummaryService) indexToVectorDB(
+    ctx context.Context,
+    chunks []*types.Chunk,
+    engine *retriever.CompositeRetrieveEngine,
+    embedder embedding.Embedder,
+    knowledgeTitle string,       // 新增
+    knowledgeDescription string, // 新增
+) error {
+    indexInfoList := make([]*types.IndexInfo, 0, len(chunks))
+    for _, chunk := range chunks {
+        indexInfoList = append(indexInfoList, &types.IndexInfo{
+            Content:              chunk.Content,
+            SourceID:             chunk.ID,
+            SourceType:           types.ChunkSourceType,
+            ChunkID:              chunk.ID,
+            KnowledgeID:          chunk.KnowledgeID,
+            KnowledgeBaseID:      chunk.KnowledgeBaseID,
+            KnowledgeTitle:       knowledgeTitle,
+            KnowledgeDescription: knowledgeDescription,
+            IsEnabled:            chunk.IsEnabled,
+        })
+    }
+    // ...
+}
+```
+
+> **⚠ IsEnabled 零值陷阱**：这 5 个非 FAQ 构造点当前未设置 `IsEnabled` 字段（Go 零值为 `false`）。
+> 本方案修复了 `ToDBVectorEmbedding` 中 `IsEnabled` 硬编码 `true` 的 bug，改为从 `IndexInfo.IsEnabled` 取值。
+> 如果只添加 title/description 而不同时设置 `IsEnabled`，修复后所有非 FAQ chunk 在 ES 中会被标记为 `disabled`，
+> 被 `getBaseConds` 的 `is_enabled` filter 过滤掉，导致**关键词搜索无结果**。
+> **因此，添加 title/description 时必须同时设置 `IsEnabled: chunk.IsEnabled`。**
 
 修改示例（以 knowledge.go:1394 为例）：
 
@@ -454,6 +512,7 @@ indexInfoList = append(indexInfoList, &types.IndexInfo{
     KnowledgeBaseID:      knowledge.KnowledgeBaseID,
     KnowledgeTitle:       knowledge.Title,       // 新增
     KnowledgeDescription: knowledge.Description,  // 新增
+    IsEnabled:            chunk.IsEnabled,         // 必须：防止零值导致 chunk 被过滤
 })
 ```
 
@@ -472,23 +531,42 @@ indexInfoList = append(indexInfoList, &types.IndexInfo{
 
 ```go
 // 在循环前批量查询 knowledge 信息
+// 注意：KnowledgeRepository 没有 GetByIDs 方法，使用 GetKnowledgeBatch（需要 tenantID）
 knowledgeIDs := make([]string, 0)
 for _, chunk := range chunks {
     knowledgeIDs = append(knowledgeIDs, chunk.KnowledgeID)
 }
-knowledgeMap, err := s.knowledgeRepo.GetByIDs(ctx, knowledgeIDs)
-// ...
+// tenantID 需要从 ctx 或上层参数获取
+knowledgeList, err := s.knowledgeRepo.GetKnowledgeBatch(ctx, tenantID, knowledgeIDs)
+if err != nil {
+    log.Warnf("[updateChunkVector] failed to get knowledge batch: %v, title/description will be empty", err)
+}
+knowledgeMap := make(map[string]*types.Knowledge)
+for _, k := range knowledgeList {
+    knowledgeMap[k.ID] = k
+}
 
 for _, chunk := range chunks {
-    k := knowledgeMap[chunk.KnowledgeID]
-    indexInfo = append(indexInfo, &types.IndexInfo{
-        Content:              chunk.Content,
-        // ... 其他字段 ...
-        KnowledgeTitle:       k.Title,
-        KnowledgeDescription: k.Description,
-    })
+    info := &types.IndexInfo{
+        Content:         chunk.Content,
+        SourceID:        chunk.ID,
+        SourceType:      types.ChunkSourceType,
+        ChunkID:         chunk.ID,
+        KnowledgeID:     chunk.KnowledgeID,
+        KnowledgeBaseID: chunk.KnowledgeBaseID,
+        IsEnabled:       chunk.IsEnabled,
+    }
+    if k, ok := knowledgeMap[chunk.KnowledgeID]; ok {
+        info.KnowledgeTitle = k.Title
+        info.KnowledgeDescription = k.Description
+    }
+    indexInfo = append(indexInfo, info)
 }
 ```
+
+> **注意**：`updateChunkVector` 的函数签名需要确保能获取 `tenantID`。
+> 当前签名 `func (s *knowledgeService) updateChunkVector(ctx, kbID string, chunks)` 没有 `tenantID`，
+> 需要从上层调用链传入或从 `ctx` 中提取。
 
 **行 6294/6323/6348（buildFAQIndexInfoList）处理方式**：
 
@@ -527,13 +605,13 @@ FAQ 相关的调用方通常已持有 `knowledge` 对象。
 | `internal/container/container.go` | `qdrant_es` 触发 Qdrant+ES 初始化 | ~6 行修改 |
 | `elasticsearch/structs.go` | `VectorEmbedding` 新增 `Title`/`Description`/`TagID`，`Embedding` 加 omitempty，修复 `IsEnabled` 映射 | ~12 行 |
 | `elasticsearch/v8/repository.go` | 移除 `Save()` 空 embedding 检查 | -4 行 |
-| `elasticsearch/v8/repository.go` | `.keyword` 后缀全部去掉（11 处） | ~11 行修改 |
+| `elasticsearch/v8/repository.go` | `.keyword` 后缀**保持不变**（multi-field mapping 兼容） | 0 行 |
 | `elasticsearch/v8/repository.go` | `createIndexIfNotExists` 添加 CJK mapping（含 title/description） | ~55 行替换 |
 | `elasticsearch/v8/repository.go` | `KeywordsRetrieve` 改为 `multi_match` 多字段搜索 | ~8 行替换 |
 | `elasticsearch/v8/repository.go` | `CopyIndices` 保留 title/description | +2 行 |
-| `knowledge.go` | 5 处直接添加 title/description + 6 处需查询/传参 | ~30 行 |
-| `extract.go` | 1 处 `IndexInfo` 构造添加 title/description | ~2 行 |
-| **合计** | | **~130 行** |
+| `knowledge.go` | 5 处直接添加 title/description + IsEnabled + 6 处需查询/传参 | ~30 行 |
+| `extract.go` | 1 处 `indexToVectorDB` 添加 title/description 参数 | ~5 行 |
+| **合计** | | **~120 行** |
 
 ## 关键代码链路分析
 
@@ -558,7 +636,7 @@ FAQ 相关的调用方通常已持有 `knowledge` 对象。
 
 - **单选配置**：`RETRIEVE_DRIVER` 只填一个驱动，`qdrant_es` 已包含两个引擎，不需要也不能与 `elasticsearch_v8` 叠加
 - **索引隔离**：`qdrant_es` 和 `elasticsearch_v8` 应使用不同的 `ELASTICSEARCH_INDEX`，因为 mapping 不同（qdrant_es 无 embedding 字段）
-- **`.keyword` 后缀去除**：此改动影响所有 ES 驱动。使用动态 mapping 创建的旧 `elasticsearch_v8` 索引需要重建
+- **`.keyword` 兼容**：mapping 使用 multi-field 定义，`field.keyword` 引用在显式 mapping 和动态 mapping 中均可正常工作，无需修改 repository.go 代码
 - **`multi_match` 增强**：对 `elasticsearch_v8` 用户也生效，但无 title/description 字段时 ES 会自动忽略缺失字段，行为与改动前一致
 - `qdrant_es` 模式下，ES 只被分配 `keywords` 类型，但 `Support()` 仍返回 `[keywords, vector]`，不影响功能——`NewCompositeRetrieveEngine` 只用 mapping 中指定的类型
 - `IndexInfo` 新增字段是可选的（零值为空字符串），不影响现有 Qdrant/Postgres 驱动
@@ -766,8 +844,8 @@ $SSH "curl -s -X POST http://localhost:8080/api/v1/knowledge-search \
 | 重新索引耗时较长 | 低 | 可后台执行，不影响现有服务 |
 | ES 内存占用 | 低 | 单节点 512MB 足够小规模使用 |
 | `Save()` 空 embedding 导致索引失败 | 已修复 | 移除空 embedding 检查 + Embedding 字段 omitempty |
-| `.keyword` 后缀不兼容 | 已修复 | 去掉 `.keyword` 后缀 + 使用显式 keyword mapping |
-| 旧 `elasticsearch_v8` 索引不兼容 | 中 | 需重建索引；`qdrant_es` 是全新部署无此问题 |
+| `.keyword` 兼容 | 已解决 | multi-field mapping 同时支持 `field` 和 `field.keyword`，无需修改 repository.go |
+| 旧 `elasticsearch_v8` 索引不兼容 | 无 | multi-field 方案对动态 mapping 和显式 mapping 均兼容 |
 | 旧数据无 title/description | 低 | `multi_match` 忽略缺失字段，fallback 到仅搜 content；重新索引后自动修复 |
 | `IndexInfo` 新字段影响其他驱动 | 无 | 零值空字符串，Qdrant/Postgres 映射函数不使用这些字段 |
 | `qdrant_es` 与 `elasticsearch_v8` 叠加配置 | 已规避 | 单选驱动，`qdrant_es` 已包含两个引擎；误配会因 engine type 重复注册启动失败（自动拦截） |
