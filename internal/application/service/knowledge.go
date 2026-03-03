@@ -1392,12 +1392,15 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 	for _, chunk := range insertChunks {
 		// Add original chunk content to index
 		indexInfoList = append(indexInfoList, &types.IndexInfo{
-			Content:         chunk.Content,
-			SourceID:        chunk.ID,
-			SourceType:      types.ChunkSourceType,
-			ChunkID:         chunk.ID,
-			KnowledgeID:     knowledge.ID,
-			KnowledgeBaseID: knowledge.KnowledgeBaseID,
+			Content:              chunk.Content,
+			SourceID:             chunk.ID,
+			SourceType:           types.ChunkSourceType,
+			ChunkID:              chunk.ID,
+			KnowledgeID:          knowledge.ID,
+			KnowledgeBaseID:      knowledge.KnowledgeBaseID,
+			KnowledgeTitle:       knowledge.Title,
+			KnowledgeDescription: knowledge.Description,
+			IsEnabled:            chunk.IsEnabled,
 		})
 	}
 
@@ -1663,12 +1666,15 @@ func (s *knowledgeService) processMetadataOnlyChunks(
 	// 3. Build index info and generate embedding.
 	indexInfoList := []*types.IndexInfo{
 		{
-			Content:         metadataText,
-			SourceID:        chunkID,
-			SourceType:      types.ChunkSourceType,
-			ChunkID:         chunkID,
-			KnowledgeID:     knowledge.ID,
-			KnowledgeBaseID: knowledge.KnowledgeBaseID,
+			Content:              metadataText,
+			SourceID:             chunkID,
+			SourceType:           types.ChunkSourceType,
+			ChunkID:              chunkID,
+			KnowledgeID:          knowledge.ID,
+			KnowledgeBaseID:      knowledge.KnowledgeBaseID,
+			KnowledgeTitle:       knowledge.Title,
+			KnowledgeDescription: knowledge.Description,
+			IsEnabled:            true,
 		},
 	}
 
@@ -2053,12 +2059,15 @@ func (s *knowledgeService) ProcessSummaryGeneration(ctx context.Context, t *asyn
 		}
 
 		indexInfo := []*types.IndexInfo{{
-			Content:         summaryChunk.Content,
-			SourceID:        summaryChunk.ID,
-			SourceType:      types.ChunkSourceType,
-			ChunkID:         summaryChunk.ID,
-			KnowledgeID:     knowledge.ID,
-			KnowledgeBaseID: knowledge.KnowledgeBaseID,
+			Content:              summaryChunk.Content,
+			SourceID:             summaryChunk.ID,
+			SourceType:           types.ChunkSourceType,
+			ChunkID:              summaryChunk.ID,
+			KnowledgeID:          knowledge.ID,
+			KnowledgeBaseID:      knowledge.KnowledgeBaseID,
+			KnowledgeTitle:       knowledge.Title,
+			KnowledgeDescription: knowledge.Description,
+			IsEnabled:            true,
 		}}
 
 		if err := retrieveEngine.BatchIndex(ctx, embeddingModel, indexInfo); err != nil {
@@ -2220,12 +2229,15 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 		for _, gq := range generatedQuestions {
 			sourceID := fmt.Sprintf("%s-%s", chunk.ID, gq.ID)
 			indexInfoList = append(indexInfoList, &types.IndexInfo{
-				Content:         gq.Question,
-				SourceID:        sourceID,
-				SourceType:      types.ChunkSourceType,
-				ChunkID:         chunk.ID,
-				KnowledgeID:     knowledge.ID,
-				KnowledgeBaseID: knowledge.KnowledgeBaseID,
+				Content:              gq.Question,
+				SourceID:             sourceID,
+				SourceType:           types.ChunkSourceType,
+				ChunkID:              chunk.ID,
+				KnowledgeID:          knowledge.ID,
+				KnowledgeBaseID:      knowledge.KnowledgeBaseID,
+				KnowledgeTitle:       knowledge.Title,
+				KnowledgeDescription: knowledge.Description,
+				IsEnabled:            chunk.IsEnabled,
 			})
 		}
 		logger.Debugf(ctx, "Generated %d questions for chunk %s", len(questions), chunk.ID)
@@ -2887,6 +2899,23 @@ func (s *knowledgeService) updateChunkVector(ctx context.Context, kbID string, c
 	}
 
 	// Initialize composite retrieve engine from tenant configuration
+	// 批量查询 knowledge 信息用于填充 title/description
+	knowledgeIDs := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		knowledgeIDs = append(knowledgeIDs, chunk.KnowledgeID)
+	}
+	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
+	var knowledgeMap map[string]*types.Knowledge
+	knowledgeList, err := s.repo.GetKnowledgeBatch(ctx, tenantInfo.ID, knowledgeIDs)
+	if err != nil {
+		logger.Warnf(ctx, "[updateChunkVector] failed to get knowledge batch: %v, title/description will be empty", err)
+	} else {
+		knowledgeMap = make(map[string]*types.Knowledge, len(knowledgeList))
+		for _, k := range knowledgeList {
+			knowledgeMap[k.ID] = k
+		}
+	}
+
 	indexInfo := make([]*types.IndexInfo, 0, len(chunks))
 	ids := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -2894,18 +2923,25 @@ func (s *knowledgeService) updateChunkVector(ctx context.Context, kbID string, c
 			logger.Warnf(ctx, "Knowledge base ID mismatch: %s != %s", chunk.KnowledgeBaseID, kbID)
 			continue
 		}
-		indexInfo = append(indexInfo, &types.IndexInfo{
+		info := &types.IndexInfo{
 			Content:         chunk.Content,
 			SourceID:        chunk.ID,
 			SourceType:      types.ChunkSourceType,
 			ChunkID:         chunk.ID,
 			KnowledgeID:     chunk.KnowledgeID,
 			KnowledgeBaseID: chunk.KnowledgeBaseID,
-		})
+			IsEnabled:       chunk.IsEnabled,
+		}
+		if knowledgeMap != nil {
+			if k, ok := knowledgeMap[chunk.KnowledgeID]; ok {
+				info.KnowledgeTitle = k.Title
+				info.KnowledgeDescription = k.Description
+			}
+		}
+		indexInfo = append(indexInfo, info)
 		ids = append(ids, chunk.ID)
 	}
 
-	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
 	retrieveEngine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
 	if err != nil {
 		return err
@@ -6268,6 +6304,8 @@ func (s *knowledgeService) buildFAQIndexInfoList(
 	ctx context.Context,
 	kb *types.KnowledgeBase,
 	chunk *types.Chunk,
+	knowledgeTitle string,
+	knowledgeDescription string,
 ) ([]*types.IndexInfo, error) {
 	indexMode := types.FAQIndexModeQuestionAnswer
 	questionIndexMode := types.FAQQuestionIndexModeCombined
@@ -6293,15 +6331,17 @@ func (s *knowledgeService) buildFAQIndexInfoList(
 		content := buildFAQIndexContent(meta, indexMode)
 		return []*types.IndexInfo{
 			{
-				Content:         content,
-				SourceID:        chunk.ID,
-				SourceType:      types.ChunkSourceType,
-				ChunkID:         chunk.ID,
-				KnowledgeID:     chunk.KnowledgeID,
-				KnowledgeBaseID: chunk.KnowledgeBaseID,
-				KnowledgeType:   types.KnowledgeTypeFAQ,
-				TagID:           chunk.TagID,
-				IsEnabled:       chunk.IsEnabled,
+				Content:              content,
+				SourceID:             chunk.ID,
+				SourceType:           types.ChunkSourceType,
+				ChunkID:              chunk.ID,
+				KnowledgeID:          chunk.KnowledgeID,
+				KnowledgeBaseID:      chunk.KnowledgeBaseID,
+				KnowledgeType:        types.KnowledgeTypeFAQ,
+				TagID:                chunk.TagID,
+				IsEnabled:            chunk.IsEnabled,
+				KnowledgeTitle:       knowledgeTitle,
+				KnowledgeDescription: knowledgeDescription,
 			},
 		}, nil
 	}
@@ -6321,15 +6361,17 @@ func (s *knowledgeService) buildFAQIndexInfoList(
 		standardContent = builder.String()
 	}
 	indexInfoList = append(indexInfoList, &types.IndexInfo{
-		Content:         standardContent,
-		SourceID:        chunk.ID,
-		SourceType:      types.ChunkSourceType,
-		ChunkID:         chunk.ID,
-		KnowledgeID:     chunk.KnowledgeID,
-		KnowledgeBaseID: chunk.KnowledgeBaseID,
-		KnowledgeType:   types.KnowledgeTypeFAQ,
-		TagID:           chunk.TagID,
-		IsEnabled:       chunk.IsEnabled,
+		Content:              standardContent,
+		SourceID:             chunk.ID,
+		SourceType:           types.ChunkSourceType,
+		ChunkID:              chunk.ID,
+		KnowledgeID:          chunk.KnowledgeID,
+		KnowledgeBaseID:      chunk.KnowledgeBaseID,
+		KnowledgeType:        types.KnowledgeTypeFAQ,
+		TagID:                chunk.TagID,
+		IsEnabled:            chunk.IsEnabled,
+		KnowledgeTitle:       knowledgeTitle,
+		KnowledgeDescription: knowledgeDescription,
 	})
 
 	// 每个相似问创建一个索引项
@@ -6346,15 +6388,17 @@ func (s *knowledgeService) buildFAQIndexInfoList(
 		}
 		sourceID := fmt.Sprintf("%s-%d", chunk.ID, i)
 		indexInfoList = append(indexInfoList, &types.IndexInfo{
-			Content:         similarContent,
-			SourceID:        sourceID,
-			SourceType:      types.ChunkSourceType,
-			ChunkID:         chunk.ID,
-			KnowledgeID:     chunk.KnowledgeID,
-			KnowledgeBaseID: chunk.KnowledgeBaseID,
-			KnowledgeType:   types.KnowledgeTypeFAQ,
-			TagID:           chunk.TagID,
-			IsEnabled:       chunk.IsEnabled,
+			Content:              similarContent,
+			SourceID:             sourceID,
+			SourceType:           types.ChunkSourceType,
+			ChunkID:              chunk.ID,
+			KnowledgeID:          chunk.KnowledgeID,
+			KnowledgeBaseID:      chunk.KnowledgeBaseID,
+			KnowledgeType:        types.KnowledgeTypeFAQ,
+			TagID:                chunk.TagID,
+			IsEnabled:            chunk.IsEnabled,
+			KnowledgeTitle:       knowledgeTitle,
+			KnowledgeDescription: knowledgeDescription,
 		})
 	}
 
@@ -6426,16 +6470,18 @@ func (s *knowledgeService) incrementalIndexFAQEntry(
 	newStdContent := buildNewContent(newMeta.StandardQuestion)
 	if oldStdContent != newStdContent {
 		indexInfoToUpdate = append(indexInfoToUpdate, &types.IndexInfo{
-			Content:         newStdContent,
-			SourceID:        chunk.ID,
-			SourceType:      types.ChunkSourceType,
-			ChunkID:         chunk.ID,
-			KnowledgeID:     chunk.KnowledgeID,
-			KnowledgeBaseID: chunk.KnowledgeBaseID,
-			KnowledgeType:   types.KnowledgeTypeFAQ,
-			TagID:           chunk.TagID,
-			IsEnabled:       chunk.IsEnabled,
-			IsRecommended:   chunk.Flags.HasFlag(types.ChunkFlagRecommended),
+			Content:              newStdContent,
+			SourceID:             chunk.ID,
+			SourceType:           types.ChunkSourceType,
+			ChunkID:              chunk.ID,
+			KnowledgeID:          chunk.KnowledgeID,
+			KnowledgeBaseID:      chunk.KnowledgeBaseID,
+			KnowledgeType:        types.KnowledgeTypeFAQ,
+			TagID:                chunk.TagID,
+			IsEnabled:            chunk.IsEnabled,
+			IsRecommended:        chunk.Flags.HasFlag(types.ChunkFlagRecommended),
+			KnowledgeTitle:       knowledge.Title,
+			KnowledgeDescription: knowledge.Description,
 		})
 	}
 
@@ -6459,16 +6505,18 @@ func (s *knowledgeService) incrementalIndexFAQEntry(
 		if needUpdate {
 			sourceID := fmt.Sprintf("%s-%d", chunk.ID, i)
 			indexInfoToUpdate = append(indexInfoToUpdate, &types.IndexInfo{
-				Content:         buildNewContent(newQ),
-				SourceID:        sourceID,
-				SourceType:      types.ChunkSourceType,
-				ChunkID:         chunk.ID,
-				KnowledgeID:     chunk.KnowledgeID,
-				KnowledgeBaseID: chunk.KnowledgeBaseID,
-				KnowledgeType:   types.KnowledgeTypeFAQ,
-				TagID:           chunk.TagID,
-				IsEnabled:       chunk.IsEnabled,
-				IsRecommended:   chunk.Flags.HasFlag(types.ChunkFlagRecommended),
+				Content:              buildNewContent(newQ),
+				SourceID:             sourceID,
+				SourceType:           types.ChunkSourceType,
+				ChunkID:              chunk.ID,
+				KnowledgeID:          chunk.KnowledgeID,
+				KnowledgeBaseID:      chunk.KnowledgeBaseID,
+				KnowledgeType:        types.KnowledgeTypeFAQ,
+				TagID:                chunk.TagID,
+				IsEnabled:            chunk.IsEnabled,
+				IsRecommended:        chunk.Flags.HasFlag(types.ChunkFlagRecommended),
+				KnowledgeTitle:       knowledge.Title,
+				KnowledgeDescription: knowledge.Description,
 			})
 		}
 	}
@@ -6533,7 +6581,7 @@ func (s *knowledgeService) indexFAQChunks(ctx context.Context,
 	indexInfo := make([]*types.IndexInfo, 0)
 	chunkIDs := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
-		infoList, err := s.buildFAQIndexInfoList(ctx, kb, chunk)
+		infoList, err := s.buildFAQIndexInfoList(ctx, kb, chunk, knowledge.Title, knowledge.Description)
 		if err != nil {
 			return err
 		}
@@ -6638,7 +6686,7 @@ func (s *knowledgeService) deleteFAQChunkVectors(ctx context.Context,
 	indexInfo := make([]*types.IndexInfo, 0)
 	chunkIDs := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
-		infoList, err := s.buildFAQIndexInfoList(ctx, kb, chunk)
+		infoList, err := s.buildFAQIndexInfoList(ctx, kb, chunk, knowledge.Title, knowledge.Description)
 		if err != nil {
 			return err
 		}
