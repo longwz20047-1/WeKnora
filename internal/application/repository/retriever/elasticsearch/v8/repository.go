@@ -17,6 +17,7 @@ import (
 	"github.com/elastic/go-elasticsearch/v8/typedapi/core/search"
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types/enums/scriptlanguage"
+	"github.com/elastic/go-elasticsearch/v8/typedapi/types/enums/textquerytype"
 	"github.com/google/uuid"
 )
 
@@ -307,7 +308,6 @@ func (e *elasticsearchRepository) createIndexIfNotExists(ctx context.Context) er
 	log := logger.GetLogger(ctx)
 	log.Debugf("[Elasticsearch] Checking if index exists: %s", e.index)
 
-	// Check if index exists
 	exists, err := e.client.Indices.Exists(e.index).Do(ctx)
 	if err != nil {
 		log.Errorf("[Elasticsearch] Failed to check if index exists: %v", err)
@@ -319,9 +319,75 @@ func (e *elasticsearchRepository) createIndexIfNotExists(ctx context.Context) er
 		return nil
 	}
 
-	// Create index if it doesn't exist
-	log.Infof("[Elasticsearch] Creating index: %s", e.index)
-	_, err = e.client.Indices.Create(e.index).Do(ctx)
+	log.Infof("[Elasticsearch] Creating index with IK analyzer: %s", e.index)
+
+	indexBody := strings.NewReader(`{
+		"settings": {
+			"number_of_shards": 1,
+			"number_of_replicas": 0,
+			"analysis": {
+				"analyzer": {
+					"content_analyzer": {
+						"type": "custom",
+						"tokenizer": "ik_max_word",
+						"filter": ["lowercase"]
+					},
+					"content_search_analyzer": {
+						"type": "custom",
+						"tokenizer": "ik_smart",
+						"filter": ["lowercase"]
+					}
+				}
+			}
+		},
+		"mappings": {
+			"properties": {
+				"title": {
+					"type": "text",
+					"analyzer": "content_analyzer",
+					"search_analyzer": "content_search_analyzer"
+				},
+				"description": {
+					"type": "text",
+					"analyzer": "content_analyzer",
+					"search_analyzer": "content_search_analyzer"
+				},
+				"content": {
+					"type": "text",
+					"analyzer": "content_analyzer",
+					"search_analyzer": "content_search_analyzer"
+				},
+				"source_id": {
+					"type": "keyword",
+					"fields": { "keyword": { "type": "keyword" } }
+				},
+				"source_type": {
+					"type": "integer"
+				},
+				"chunk_id": {
+					"type": "keyword",
+					"fields": { "keyword": { "type": "keyword" } }
+				},
+				"knowledge_id": {
+					"type": "keyword",
+					"fields": { "keyword": { "type": "keyword" } }
+				},
+				"knowledge_base_id": {
+					"type": "keyword",
+					"fields": { "keyword": { "type": "keyword" } }
+				},
+				"tag_id": {
+					"type": "keyword",
+					"fields": { "keyword": { "type": "keyword" } }
+				},
+				"is_enabled": {
+					"type": "boolean"
+				}
+			}
+		}
+	}`)
+
+	_, err = e.client.Indices.Create(e.index).Raw(indexBody).Do(ctx)
 	if err != nil {
 		log.Errorf("[Elasticsearch] Failed to create index: %v", err)
 		return err
@@ -433,9 +499,16 @@ func (e *elasticsearchRepository) KeywordsRetrieve(ctx context.Context,
 	log.Infof("[Elasticsearch] Performing keywords retrieval with query: %s, topK: %d", params.Query, params.TopK)
 
 	filter := e.getBaseConds(params)
-	// Build must conditions for content matching
+	// Build must conditions for multi-field matching with boosting
+	bestFields := textquerytype.Bestfields
 	must := []types.Query{
-		{Match: map[string]types.MatchQuery{"content": {Query: params.Query}}},
+		{
+			MultiMatch: &types.MultiMatchQuery{
+				Query:  params.Query,
+				Fields: []string{"title^3", "description^2", "content"},
+				Type:   &bestFields,
+			},
+		},
 	}
 
 	log.Debugf("[Elasticsearch] Executing keyword search in index: %s", e.index)
@@ -584,12 +657,14 @@ func (e *elasticsearchRepository) CopyIndices(ctx context.Context,
 
 			// Create new index information
 			indexInfo := &typesLocal.IndexInfo{
-				Content:         sourceDoc.Content,
-				SourceID:        targetSourceID,
-				SourceType:      typesLocal.SourceType(sourceDoc.SourceType),
-				ChunkID:         targetChunkID,
-				KnowledgeID:     targetKnowledgeID,
-				KnowledgeBaseID: targetKnowledgeBaseID,
+				Content:              sourceDoc.Content,
+				SourceID:             targetSourceID,
+				SourceType:           typesLocal.SourceType(sourceDoc.SourceType),
+				ChunkID:              targetChunkID,
+				KnowledgeID:          targetKnowledgeID,
+				KnowledgeBaseID:      targetKnowledgeBaseID,
+				KnowledgeTitle:       sourceDoc.Title,
+				KnowledgeDescription: sourceDoc.Description,
 			}
 
 			indexInfoList = append(indexInfoList, indexInfo)
