@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	elasticsearchRetriever "github.com/Tencent/WeKnora/internal/application/repository/retriever/elasticsearch"
@@ -99,6 +100,19 @@ func (e *elasticsearchRepository) EstimateStorageSize(ctx context.Context,
 	return totalStorageSize
 }
 
+// needsEmbedding checks if the current engine is responsible for vector retrieval.
+// When retriever_types is not passed (legacy elasticsearch_v8 path), defaults to true.
+func needsEmbedding(params map[string]any) bool {
+	if params == nil {
+		return true
+	}
+	retrieverTypes, ok := params["retriever_types"].([]typesLocal.RetrieverType)
+	if !ok {
+		return true
+	}
+	return slices.Contains(retrieverTypes, typesLocal.VectorRetrieverType)
+}
+
 // Save stores a single index document in Elasticsearch
 // Returns an error if the operation fails
 func (e *elasticsearchRepository) Save(ctx context.Context,
@@ -110,7 +124,7 @@ func (e *elasticsearchRepository) Save(ctx context.Context,
 
 	// Convert to database format
 	embeddingDB := elasticsearchRetriever.ToDBVectorEmbedding(embedding, additionalParams)
-	if len(embeddingDB.Embedding) == 0 {
+	if needsEmbedding(additionalParams) && len(embeddingDB.Embedding) == 0 {
 		err := fmt.Errorf("empty embedding vector for chunk ID: %s", embedding.ChunkID)
 		log.Errorf("[Elasticsearch] %v", err)
 		return err

@@ -55,6 +55,7 @@ func (v *KeywordsVectorHybridRetrieveEngineService) Index(ctx context.Context,
 		embeddingMap[indexInfo.SourceID] = embedding
 	}
 	params["embedding"] = embeddingMap
+	params["retriever_types"] = retrieverTypes
 	return v.indexRepository.Save(ctx, indexInfo, params)
 }
 
@@ -95,20 +96,20 @@ func (v *KeywordsVectorHybridRetrieveEngineService) BatchIndex(ctx context.Conte
 		const maxConcurrency = 5
 		if len(chunks) <= maxConcurrency {
 			// For small number of batches, use simple concurrency
-			return v.concurrentBatchSave(ctx, chunks, embeddings, batchSize)
+			return v.concurrentBatchSave(ctx, chunks, embeddings, batchSize, retrieverTypes)
 		}
 
 		// For large number of batches, use bounded concurrency
-		return v.boundedConcurrentBatchSave(ctx, chunks, embeddings, batchSize, maxConcurrency)
+		return v.boundedConcurrentBatchSave(ctx, chunks, embeddings, batchSize, maxConcurrency, retrieverTypes)
 	}
 
 	// For non-vector retrieval, use concurrent batch saving as well
 	chunks := utils.ChunkSlice(indexInfoList, 10)
 	const maxConcurrency = 5
 	if len(chunks) <= maxConcurrency {
-		return v.concurrentBatchSaveNoEmbedding(ctx, chunks)
+		return v.concurrentBatchSaveNoEmbedding(ctx, chunks, retrieverTypes)
 	}
-	return v.boundedConcurrentBatchSaveNoEmbedding(ctx, chunks, maxConcurrency)
+	return v.boundedConcurrentBatchSaveNoEmbedding(ctx, chunks, maxConcurrency, retrieverTypes)
 }
 
 // concurrentBatchSave saves all batches concurrently without concurrency limit
@@ -117,6 +118,7 @@ func (v *KeywordsVectorHybridRetrieveEngineService) concurrentBatchSave(
 	chunks [][]*types.IndexInfo,
 	embeddings [][]float32,
 	batchSize int,
+	retrieverTypes []types.RetrieverType,
 ) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for i, indexChunk := range chunks {
@@ -127,6 +129,7 @@ func (v *KeywordsVectorHybridRetrieveEngineService) concurrentBatchSave(
 				embeddingMap[indexInfo.SourceID] = embeddings[i*batchSize+j]
 			}
 			params["embedding"] = embeddingMap
+			params["retriever_types"] = retrieverTypes
 			return v.indexRepository.BatchSave(ctx, indexChunk, params)
 		})
 	}
@@ -140,6 +143,7 @@ func (v *KeywordsVectorHybridRetrieveEngineService) boundedConcurrentBatchSave(
 	embeddings [][]float32,
 	batchSize int,
 	maxConcurrency int,
+	retrieverTypes []types.RetrieverType,
 ) error {
 	g, ctx := errgroup.WithContext(ctx)
 	sem := make(chan struct{}, maxConcurrency)
@@ -159,6 +163,7 @@ func (v *KeywordsVectorHybridRetrieveEngineService) boundedConcurrentBatchSave(
 				embeddingMap[indexInfo.SourceID] = embeddings[i*batchSize+j]
 			}
 			params["embedding"] = embeddingMap
+			params["retriever_types"] = retrieverTypes
 			return v.indexRepository.BatchSave(ctx, indexChunk, params)
 		})
 	}
@@ -169,11 +174,13 @@ func (v *KeywordsVectorHybridRetrieveEngineService) boundedConcurrentBatchSave(
 func (v *KeywordsVectorHybridRetrieveEngineService) concurrentBatchSaveNoEmbedding(
 	ctx context.Context,
 	chunks [][]*types.IndexInfo,
+	retrieverTypes []types.RetrieverType,
 ) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for _, indexChunk := range chunks {
 		g.Go(func() error {
 			params := make(map[string]any)
+			params["retriever_types"] = retrieverTypes
 			return v.indexRepository.BatchSave(ctx, indexChunk, params)
 		})
 	}
@@ -185,6 +192,7 @@ func (v *KeywordsVectorHybridRetrieveEngineService) boundedConcurrentBatchSaveNo
 	ctx context.Context,
 	chunks [][]*types.IndexInfo,
 	maxConcurrency int,
+	retrieverTypes []types.RetrieverType,
 ) error {
 	g, ctx := errgroup.WithContext(ctx)
 	sem := make(chan struct{}, maxConcurrency)
@@ -199,6 +207,7 @@ func (v *KeywordsVectorHybridRetrieveEngineService) boundedConcurrentBatchSaveNo
 			}
 
 			params := make(map[string]any)
+			params["retriever_types"] = retrieverTypes
 			return v.indexRepository.BatchSave(ctx, indexChunk, params)
 		})
 	}
