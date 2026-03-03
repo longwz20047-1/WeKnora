@@ -123,6 +123,11 @@ func (e *elasticsearchRepository) Save(ctx context.Context,
 	log := logger.GetLogger(ctx)
 	log.Debugf("[Elasticsearch] Saving index for chunk ID: %s", embedding.ChunkID)
 
+	// Ensure index exists with correct mapping before writing
+	if err := e.createIndexIfNotExists(ctx); err != nil {
+		log.Warnf("[Elasticsearch] Failed to ensure index exists: %v", err)
+	}
+
 	// Convert to database format
 	embeddingDB := elasticsearchRetriever.ToDBVectorEmbedding(embedding, additionalParams)
 	if needsEmbedding(additionalParams) && len(embeddingDB.Embedding) == 0 {
@@ -154,6 +159,12 @@ func (e *elasticsearchRepository) BatchSave(ctx context.Context,
 	}
 
 	log.Infof("[Elasticsearch] Batch saving %d indices", len(embeddingList))
+
+	// Ensure index exists with correct mapping before writing
+	if err := e.createIndexIfNotExists(ctx); err != nil {
+		log.Warnf("[Elasticsearch] Failed to ensure index exists: %v", err)
+	}
+
 	indexRequest := e.client.Bulk().Index(e.index)
 
 	// Add each document to the bulk request
