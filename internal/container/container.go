@@ -26,7 +26,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Tencent/WeKnora/docreader/client"
-	firecrawl "github.com/mendableai/firecrawl-go/v2"
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	elasticsearchRepoV7 "github.com/Tencent/WeKnora/internal/application/repository/retriever/elasticsearch/v7"
 	elasticsearchRepoV8 "github.com/Tencent/WeKnora/internal/application/repository/retriever/elasticsearch/v8"
@@ -53,6 +52,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/tracing"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	firecrawl "github.com/mendableai/firecrawl-go/v2"
 )
 
 // BuildContainer constructs the dependency injection container
@@ -453,7 +453,7 @@ func initRetrieveEngineRegistry(db *gorm.DB, cfg *config.Config) (interfaces.Ret
 			log.Infof("Register postgres retrieve engine success")
 		}
 	}
-	if slices.Contains(retrieveDriver, "elasticsearch_v8") {
+	if slices.Contains(retrieveDriver, "elasticsearch_v8") || slices.Contains(retrieveDriver, "qdrant_es") {
 		client, err := elasticsearch.NewTypedClient(elasticsearch.Config{
 			Addresses: []string{os.Getenv("ELASTICSEARCH_ADDR")},
 			Username:  os.Getenv("ELASTICSEARCH_USERNAME"),
@@ -497,7 +497,7 @@ func initRetrieveEngineRegistry(db *gorm.DB, cfg *config.Config) (interfaces.Ret
 		}
 	}
 
-	if slices.Contains(retrieveDriver, "qdrant") {
+	if slices.Contains(retrieveDriver, "qdrant") || slices.Contains(retrieveDriver, "qdrant_es") {
 		qdrantHost := os.Getenv("QDRANT_HOST")
 		if qdrantHost == "" {
 			qdrantHost = "localhost"

@@ -27,6 +27,10 @@ var retrieverEngineMapping = map[string][]RetrieverEngineParams{
 		{RetrieverType: KeywordsRetrieverType, RetrieverEngineType: QdrantRetrieverEngineType},
 		{RetrieverType: VectorRetrieverType, RetrieverEngineType: QdrantRetrieverEngineType},
 	},
+	"qdrant_es": {
+		{RetrieverType: KeywordsRetrieverType, RetrieverEngineType: ElasticsearchRetrieverEngineType},
+		{RetrieverType: VectorRetrieverType, RetrieverEngineType: QdrantRetrieverEngineType},
+	},
 }
 
 // GetRetrieverEngineMapping returns the retriever engine mapping

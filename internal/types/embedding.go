@@ -27,15 +27,17 @@ const (
 
 // IndexInfo contains information about indexed content
 type IndexInfo struct {
-	ID              string     // Unique identifier
-	Content         string     // Content text
-	SourceID        string     // ID of the source document
-	SourceType      SourceType // Type of the source
-	ChunkID         string     // ID of the text chunk
-	KnowledgeID     string     // ID of the knowledge
-	KnowledgeBaseID string     // ID of the knowledge base
-	KnowledgeType   string     // Type of the knowledge (e.g., "faq", "manual")
-	TagID           string     // Tag ID for categorization (used for FAQ priority filtering)
-	IsEnabled       bool       // Whether the chunk is enabled for retrieval
-	IsRecommended   bool       // Whether the chunk is recommended
+	ID                   string     // Unique identifier
+	Content              string     // Content text
+	SourceID             string     // ID of the source document
+	SourceType           SourceType // Type of the source
+	ChunkID              string     // ID of the text chunk
+	KnowledgeID          string     // ID of the knowledge
+	KnowledgeBaseID      string     // ID of the knowledge base
+	KnowledgeType        string     // Type of the knowledge (e.g., "faq", "manual")
+	TagID                string     // Tag ID for categorization (used for FAQ priority filtering)
+	IsEnabled            bool       // Whether the chunk is enabled for retrieval
+	IsRecommended        bool       // Whether the chunk is recommended
+	KnowledgeTitle       string     // 所属文档标题，用于 ES 多字段关键词搜索
+	KnowledgeDescription string     // 所属文档摘要，用于 ES 多字段关键词搜索
 }
