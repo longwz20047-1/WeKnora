@@ -117,7 +117,7 @@ func (e *elasticsearchRepository) Save(ctx context.Context,
 	}
 
 	// Index the document
-	resp, err := e.client.Index(e.index).Request(embeddingDB).Do(ctx)
+	resp, err := e.client.Index(e.index).Id(embedding.ChunkID).Request(embeddingDB).Do(ctx)
 	if err != nil {
 		log.Errorf("[Elasticsearch] Failed to save index: %v", err)
 		return err
@@ -144,7 +144,8 @@ func (e *elasticsearchRepository) BatchSave(ctx context.Context,
 	// Add each document to the bulk request
 	for _, embedding := range embeddingList {
 		embeddingDB := elasticsearchRetriever.ToDBVectorEmbedding(embedding, additionalParams)
-		err := indexRequest.CreateOp(types.CreateOperation{Index_: &e.index}, embeddingDB)
+		chunkID := embeddingDB.ChunkID
+		err := indexRequest.IndexOp(types.IndexOperation{Index_: &e.index, Id_: &chunkID}, embeddingDB)
 		if err != nil {
 			log.Errorf("[Elasticsearch] Failed to create bulk operation: %v", err)
 			return fmt.Errorf("failed to create op: %w", err)

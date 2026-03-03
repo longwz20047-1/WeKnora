@@ -9,14 +9,17 @@ import (
 
 // VectorEmbedding defines the Elasticsearch document structure for vector embeddings
 type VectorEmbedding struct {
-	Content         string    `json:"content"           gorm:"column:content;not null"`     // Text content of the chunk
-	SourceID        string    `json:"source_id"         gorm:"column:source_id;not null"`   // ID of the source document
-	SourceType      int       `json:"source_type"       gorm:"column:source_type;not null"` // Type of the source document
-	ChunkID         string    `json:"chunk_id"          gorm:"column:chunk_id"`             // Unique ID of the text chunk
-	KnowledgeID     string    `json:"knowledge_id"      gorm:"column:knowledge_id"`         // ID of the knowledge item
-	KnowledgeBaseID string    `json:"knowledge_base_id" gorm:"column:knowledge_base_id"`    // ID of the knowledge base
-	Embedding       []float32 `json:"embedding"         gorm:"column:embedding;not null"`   // Vector embedding of the content
-	IsEnabled       bool      `json:"is_enabled"`                                           // Whether the chunk is enabled
+	Content         string    `json:"content"                    gorm:"column:content;not null"`
+	SourceID        string    `json:"source_id"                  gorm:"column:source_id;not null"`
+	SourceType      int       `json:"source_type"                gorm:"column:source_type;not null"`
+	ChunkID         string    `json:"chunk_id"                   gorm:"column:chunk_id"`
+	KnowledgeID     string    `json:"knowledge_id"               gorm:"column:knowledge_id"`
+	KnowledgeBaseID string    `json:"knowledge_base_id"          gorm:"column:knowledge_base_id"`
+	TagID           string    `json:"tag_id,omitempty"            gorm:"column:tag_id"`
+	Embedding       []float32 `json:"embedding,omitempty"         gorm:"column:embedding;not null"`
+	IsEnabled       bool      `json:"is_enabled"`
+	Title           string    `json:"title,omitempty"`
+	Description     string    `json:"description,omitempty"`
 }
 
 // VectorEmbeddingWithScore extends VectorEmbedding with similarity score
@@ -34,7 +37,10 @@ func ToDBVectorEmbedding(embedding *types.IndexInfo, additionalParams map[string
 		ChunkID:         embedding.ChunkID,
 		KnowledgeID:     embedding.KnowledgeID,
 		KnowledgeBaseID: embedding.KnowledgeBaseID,
-		IsEnabled:       true, // Default to enabled
+		TagID:           embedding.TagID,
+		IsEnabled:       embedding.IsEnabled,
+		Title:           embedding.KnowledgeTitle,
+		Description:     embedding.KnowledgeDescription,
 	}
 	// Add embedding data if available in additionalParams
 	if additionalParams != nil && slices.Contains(slices.Collect(maps.Keys(additionalParams)), "embedding") {
@@ -42,7 +48,7 @@ func ToDBVectorEmbedding(embedding *types.IndexInfo, additionalParams map[string
 			vector.Embedding = embeddingMap[embedding.SourceID]
 		}
 	}
-	// Get is_enabled from additionalParams if available
+	// Get is_enabled from additionalParams if available (highest priority override)
 	if additionalParams != nil {
 		if chunkEnabledMap, ok := additionalParams["chunk_enabled"].(map[string]bool); ok {
 			if enabled, exists := chunkEnabledMap[embedding.ChunkID]; exists {
