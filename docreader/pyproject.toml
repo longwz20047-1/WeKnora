@@ -39,4 +39,5 @@ dependencies = [
     "extract-msg>=0.45,<1.0",
     "pychm>=0.8.4;sys_platform=='linux'",
     "defusedxml>=0.7",
+    "docling[asr]>=2.77.0",
 ]
