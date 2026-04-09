@@ -52,6 +52,7 @@ type RouterParams struct {
 	OrganizationHandler   *handler.OrganizationHandler
 	BrowserHandler        *handler.BrowserHandler
 	OnlyOfficeHandler     *handler.OnlyOfficeHandler
+	WeChatAuthHandler     *handler.WeChatAuthHandler
 }
 
 // NewRouter 创建新的路由
@@ -127,6 +128,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterSkillRoutes(v1, params.SkillHandler)
 		RegisterOrganizationRoutes(v1, params.OrganizationHandler)
 		RegisterBrowserRoutes(v1, params.BrowserHandler)
+		RegisterWeChatAuthRoutes(v1, params.WeChatAuthHandler)
 
 		// ONLYOFFICE authenticated route
 		if params.OnlyOfficeHandler.Enabled() {
@@ -576,5 +578,22 @@ func RegisterBrowserRoutes(r *gin.RouterGroup, h *handler.BrowserHandler) {
 		browser.POST("/capture", h.Capture)
 		browser.GET("/screen/:id", h.ScreenStream)
 		browser.POST("/input/:id", h.SendInput)
+	}
+}
+
+// RegisterWeChatAuthRoutes 注册企业微信 OAuth 认证路由
+func RegisterWeChatAuthRoutes(r *gin.RouterGroup, h *handler.WeChatAuthHandler) {
+	wechat := r.Group("/auth/wechat")
+	{
+		// 无需认证（由 noAuthAPI 白名单放行）
+		wechat.GET("/config", h.GetConfig)
+		wechat.POST("/qrcode", h.GenerateQRCode)
+		wechat.GET("/poll/:ticket", h.PollStatus)
+		wechat.GET("/callback", h.OAuthCallback)
+
+		// 需要认证
+		wechat.GET("/binding", h.GetBinding)
+		wechat.DELETE("/unbind", h.Unbind)
+		wechat.POST("/set-password", h.SetPassword)
 	}
 }

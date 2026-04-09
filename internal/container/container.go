@@ -212,6 +212,12 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(handler.NewOrganizationHandler))
 	must(container.Provide(handler.NewBrowserHandler))
 	must(container.Provide(handler.NewOnlyOfficeHandler))
+
+	// WeChat OAuth
+	must(container.Provide(repository.NewWeChatConfigRepository))
+	must(container.Provide(repository.NewOAuthBindingRepository))
+	must(container.Provide(service.NewWeChatAuthService))
+	must(container.Provide(handler.NewWeChatAuthHandler))
 	logger.Debugf(ctx, "[Container] HTTP handlers registered")
 
 	// Router configuration
