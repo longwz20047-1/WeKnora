@@ -34,6 +34,12 @@ type WeChatConfig struct {
 	DeletedAt gorm.DeletedAt `json:"deleted_at" gorm:"index"`
 }
 
+// TableName specifies the table name for GORM
+// Without this, GORM converts WeChatConfig to "we_chat_configs" instead of "wechat_configs"
+func (WeChatConfig) TableName() string {
+	return "wechat_configs"
+}
+
 // OAuthBinding OAuth 绑定关系
 type OAuthBinding struct {
 	// 唯一标识（UUID）
@@ -62,6 +68,12 @@ type OAuthBinding struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	// 软删除时间
 	DeletedAt gorm.DeletedAt `json:"deleted_at" gorm:"index"`
+}
+
+// TableName specifies the table name for GORM
+// Without this, GORM converts OAuthBinding to "o_auth_bindings" instead of "oauth_bindings"
+func (OAuthBinding) TableName() string {
+	return "oauth_bindings"
 }
 
 // WeChatUserInfo 企业微信用户信息（从 SDK 映射）
