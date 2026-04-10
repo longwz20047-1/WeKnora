@@ -172,15 +172,15 @@ func (h *WeChatAuthHandler) OAuthCallback(c *gin.Context) {
 	}
 
 	// Redirect browser back to the frontend login page with ticket.
-	// The frontend will poll once using this ticket to retrieve the JWT.
-	frontendURL := "/login?wechat_ticket=" + url.QueryEscape(state)
-
-	// If Referer or Origin header hints at a different frontend host, use it.
-	if origin := c.GetHeader("Origin"); origin != "" {
-		frontendURL = origin + "/login?wechat_ticket=" + url.QueryEscape(state)
+	// Use qrcode_redirect_url from config as the frontend base URL.
+	config, _ := h.wechatService.GetConfig(ctx)
+	frontendBase := "/login"
+	if config != nil && config.QRCodeRedirectURL != "" {
+		frontendBase = config.QRCodeRedirectURL
 	}
 
-	c.Redirect(http.StatusFound, frontendURL)
+	redirectURL := frontendBase + "?wechat_ticket=" + url.QueryEscape(state)
+	c.Redirect(http.StatusFound, redirectURL)
 }
 
 // GetBinding godoc
