@@ -322,15 +322,16 @@ func (s *wechatAuthService) GenerateQRCode(ctx context.Context) (ticket, qrcodeU
 		return "", "", fmt.Errorf("store qr ticket in redis: %w", err)
 	}
 
-	// Build WeChat Work OAuth authorize URL.
-	// Format: https://open.weixin.qq.com/connect/oauth2/authorize?appid={corpid}&redirect_uri={redirect}&response_type=code&scope=snsapi_privateinfo&state={ticket}#wechat_redirect
+	// Build WeChat Work QR code scan-to-login URL.
+	// Docs: https://developer.work.weixin.qq.com/document/path/91019
 	redirectURI := config.QRCodeRedirectURL
 	if redirectURI == "" {
 		redirectURI = config.CallbackURL
 	}
 	qrcodeURL = fmt.Sprintf(
-		"https://open.weixin.qq.com/connect/oauth2/authorize?appid=%s&redirect_uri=%s&response_type=code&scope=snsapi_privateinfo&state=%s#wechat_redirect",
+		"https://open.work.weixin.qq.com/wwopen/sso/qrConnect?appid=%s&agentid=%d&redirect_uri=%s&state=%s",
 		url.QueryEscape(config.CorpID),
+		config.AgentID,
 		url.QueryEscape(redirectURI),
 		url.QueryEscape(ticket),
 	)
