@@ -37,7 +37,7 @@ func NewWeChatAuthHandler(
 
 // setPasswordRequest is the request body for SetPassword endpoint
 type setPasswordRequest struct {
-	NewPassword string `json:"new_password" binding:"required,min=6"`
+	NewPassword string `json:"new_password" binding:"required,min=6,max=72"`
 }
 
 // GetConfig godoc
@@ -153,6 +153,11 @@ func (h *WeChatAuthHandler) OAuthCallback(c *gin.Context) {
 
 	if code == "" {
 		appErr := errors.NewValidationError("OAuth code is required")
+		c.Error(appErr)
+		return
+	}
+	if state == "" {
+		appErr := errors.NewValidationError("OAuth state is required")
 		c.Error(appErr)
 		return
 	}

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,8 +44,6 @@ type wechatAuthService struct {
 	oauthRepo     interfaces.OAuthBindingRepository
 	configRepo    interfaces.WeChatConfigRepository
 	redisClient   *redis.Client
-	wechatClient  *wechat.Client // lazily initialised
-	mu            sync.Mutex     // protects wechatClient lazy init
 }
 
 // NewWeChatAuthService creates a new WeChatAuthService instance.
@@ -69,13 +66,11 @@ func NewWeChatAuthService(
 }
 
 // ---------------------------------------------------------------------------
-// getOrCreateClient lazily creates a wechat.Client from the enabled config.
+// getOrCreateClient creates a wechat.Client from the enabled config.
+// A new client is created per call — simple and correct when config may change.
 // ---------------------------------------------------------------------------
 
 func (s *wechatAuthService) getOrCreateClient(ctx context.Context) (*wechat.Client, *types.WeChatConfig, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	config, err := s.configRepo.GetEnabled(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get wechat config: %w", err)
@@ -84,10 +79,8 @@ func (s *wechatAuthService) getOrCreateClient(ctx context.Context) (*wechat.Clie
 		return nil, nil, errors.New("wechat work login is not configured")
 	}
 
-	// Re-create client every time config may have changed (simple and safe).
-	// In production the config rarely changes, but correctness trumps caching here.
-	s.wechatClient = wechat.NewClient(config.CorpID, config.AgentSecret, config.AgentID)
-	return s.wechatClient, config, nil
+	client := wechat.NewClient(config.CorpID, config.AgentSecret, config.AgentID)
+	return client, config, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +224,7 @@ func (s *wechatAuthService) createNewUser(ctx context.Context, config *types.WeC
 		name = wxUser.UserID
 	}
 	tenant, err := s.tenantService.CreateTenant(ctx, &types.Tenant{
+		// Sanitize to strip control characters (reuses log sanitiser — safe for display names too).
 		Name:        fmt.Sprintf("%s's Workspace", secutils.SanitizeForLog(name)),
 		Description: "Default workspace",
 		Status:      "active",
@@ -365,6 +359,9 @@ func (s *wechatAuthService) PollTicketStatus(ctx context.Context, ticket string)
 	case val == ticketStatusScanned:
 		return "scanned", nil, nil
 	case strings.HasPrefix(val, ticketStatusConfirmedPrefix):
+		// Consume the ticket atomically — prevent replay of JWT tokens.
+		s.redisClient.Del(ctx, key)
+
 		jsonData := val[len(ticketStatusConfirmedPrefix):]
 		var resp types.LoginResponse
 		if err := json.Unmarshal([]byte(jsonData), &resp); err != nil {
