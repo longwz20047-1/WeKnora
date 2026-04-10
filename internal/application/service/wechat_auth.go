@@ -147,30 +147,13 @@ func (s *wechatAuthService) LoginByCode(ctx context.Context, code string) (*type
 
 // loginExistingBinding generates tokens for an already-bound user.
 func (s *wechatAuthService) loginExistingBinding(ctx context.Context, binding *types.OAuthBinding) (*types.LoginResponse, error) {
-	user, err := s.userRepo.GetUserByEmail(ctx, binding.ProviderEmail)
+	// Look up by the authoritative binding.UserID first, not email.
+	user, err := s.userRepo.GetUserByID(ctx, binding.UserID)
 	if err != nil {
-		// The binding exists but references a user we cannot find by the stored email.
-		// Fall back to looking up by the user ID stored in the binding.
-		user, err = s.findUserByID(ctx, binding.UserID)
-		if err != nil {
-			return nil, fmt.Errorf("find bound user: %w", err)
-		}
+		return nil, fmt.Errorf("find bound user %s: %w", binding.UserID, err)
 	}
 
 	return s.buildLoginResponse(ctx, user)
-}
-
-// findUserByID is a thin helper — the UserRepository exposes GetUserByEmail/Username
-// but we may need to look up by ID. We use the repo method directly.
-func (s *wechatAuthService) findUserByID(ctx context.Context, userID string) (*types.User, error) {
-	// The UserRepository interface has GetUserByID on the extended repository.
-	type byIDRepo interface {
-		GetUserByID(ctx context.Context, id string) (*types.User, error)
-	}
-	if repo, ok := s.userRepo.(byIDRepo); ok {
-		return repo.GetUserByID(ctx, userID)
-	}
-	return nil, fmt.Errorf("user repository does not support GetUserByID")
 }
 
 // loginNewBinding handles the case where no OAuth binding exists yet.
@@ -213,7 +196,12 @@ func (s *wechatAuthService) createNewUser(ctx context.Context, config *types.WeC
 	}
 	existing, _ := s.userRepo.GetUserByUsername(ctx, username)
 	if existing != nil {
-		username = username + "_wx"
+		// Use UserID suffix to ensure uniqueness across same-name users
+		suffix := wxUser.UserID
+		if len(suffix) > 6 {
+			suffix = suffix[:6]
+		}
+		username = username + "_" + suffix
 	}
 
 	// Determine email — use real one if available, otherwise generate a placeholder.
@@ -243,7 +231,9 @@ func (s *wechatAuthService) createNewUser(ctx context.Context, config *types.WeC
 		name = wxUser.UserID
 	}
 	tenant, err := s.tenantService.CreateTenant(ctx, &types.Tenant{
-		Name: fmt.Sprintf("%s's Workspace", secutils.SanitizeForLog(name)),
+		Name:        fmt.Sprintf("%s's Workspace", secutils.SanitizeForLog(name)),
+		Description: "Default workspace",
+		Status:      "active",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create tenant: %w", err)
@@ -393,12 +383,17 @@ func (s *wechatAuthService) PollTicketStatus(ctx context.Context, ticket string)
 
 func (s *wechatAuthService) HandleCallback(ctx context.Context, code, state string) (*types.LoginResponse, error) {
 	ticket := state
+	key := qrTicketPrefix + ticket
+
+	// Validate ticket exists in Redis (CSRF protection).
+	val, err := s.redisClient.Get(ctx, key).Result()
+	if err != nil || (val != ticketStatusPending && val != ticketStatusScanned) {
+		return nil, fmt.Errorf("invalid or expired callback state")
+	}
 
 	// Mark ticket as scanned.
-	key := qrTicketPrefix + ticket
 	if err := s.redisClient.Set(ctx, key, ticketStatusScanned, qrTicketTTL).Err(); err != nil {
 		logger.Errorf(ctx, "WeChat OAuth: failed to update ticket to scanned: %v", err)
-		// Non-fatal: proceed with login anyway.
 	}
 
 	// Perform the actual login.

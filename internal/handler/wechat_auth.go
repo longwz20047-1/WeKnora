@@ -62,8 +62,9 @@ func (h *WeChatAuthHandler) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"enabled": config.IsEnabled,
-			"corp_id": config.CorpID,
+			"enabled":  config.IsEnabled,
+			"corp_id":  config.CorpID,
+			"agent_id": config.AgentID,
 		},
 	})
 }
@@ -183,7 +184,7 @@ func (h *WeChatAuthHandler) OAuthCallback(c *gin.Context) {
 func (h *WeChatAuthHandler) GetBinding(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	user, exists := c.Get("user")
+	user, exists := c.Get(types.UserContextKey.String())
 	if !exists {
 		appErr := errors.NewUnauthorizedError("User not found in context")
 		c.Error(appErr)
@@ -218,7 +219,7 @@ func (h *WeChatAuthHandler) GetBinding(c *gin.Context) {
 func (h *WeChatAuthHandler) Unbind(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	user, exists := c.Get("user")
+	user, exists := c.Get(types.UserContextKey.String())
 	if !exists {
 		appErr := errors.NewUnauthorizedError("User not found in context")
 		c.Error(appErr)
@@ -264,7 +265,7 @@ func (h *WeChatAuthHandler) SetPassword(c *gin.Context) {
 		return
 	}
 
-	user, exists := c.Get("user")
+	user, exists := c.Get(types.UserContextKey.String())
 	if !exists {
 		appErr := errors.NewUnauthorizedError("User not found in context")
 		c.Error(appErr)
