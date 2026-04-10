@@ -324,15 +324,13 @@ func (s *wechatAuthService) GenerateQRCode(ctx context.Context) (ticket, qrcodeU
 
 	// Build WeChat Work QR code scan-to-login URL.
 	// Docs: https://developer.work.weixin.qq.com/document/path/91019
-	redirectURI := config.QRCodeRedirectURL
-	if redirectURI == "" {
-		redirectURI = config.CallbackURL
-	}
+	// callback_url is the backend endpoint where WeChat sends the OAuth code.
+	// qrcode_redirect_url is reserved for the frontend redirect after login.
 	qrcodeURL = fmt.Sprintf(
 		"https://open.work.weixin.qq.com/wwopen/sso/qrConnect?appid=%s&agentid=%d&redirect_uri=%s&state=%s",
 		url.QueryEscape(config.CorpID),
 		config.AgentID,
-		url.QueryEscape(redirectURI),
+		url.QueryEscape(config.CallbackURL),
 		url.QueryEscape(ticket),
 	)
 
