@@ -23,7 +23,7 @@ type WeChatConfig struct {
 	// OAuth 回调 URL
 	CallbackURL string `json:"callback_url" gorm:"type:varchar(512)"`
 	// 扫码登录重定向 URL
-	QRCodeRedirectURL string `json:"qrcode_redirect_url" gorm:"type:varchar(512)"`
+	QRCodeRedirectURL string `json:"qrcode_redirect_url" gorm:"column:qrcode_redirect_url;type:varchar(512)"`
 	// 是否启用
 	IsEnabled bool `json:"is_enabled" gorm:"default:true"`
 	// 创建时间
