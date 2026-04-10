@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -162,7 +163,7 @@ func (h *WeChatAuthHandler) OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	loginResp, err := h.wechatService.HandleCallback(ctx, code, state)
+	_, err := h.wechatService.HandleCallback(ctx, code, state)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to handle OAuth callback: %v", err)
 		appErr := errors.NewInternalServerError("OAuth callback failed").WithDetails(err.Error())
@@ -170,10 +171,16 @@ func (h *WeChatAuthHandler) OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data":    loginResp,
-	})
+	// Redirect browser back to the frontend login page with ticket.
+	// The frontend will poll once using this ticket to retrieve the JWT.
+	frontendURL := "/login?wechat_ticket=" + url.QueryEscape(state)
+
+	// If Referer or Origin header hints at a different frontend host, use it.
+	if origin := c.GetHeader("Origin"); origin != "" {
+		frontendURL = origin + "/login?wechat_ticket=" + url.QueryEscape(state)
+	}
+
+	c.Redirect(http.StatusFound, frontendURL)
 }
 
 // GetBinding godoc
