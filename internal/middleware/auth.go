@@ -25,6 +25,7 @@ var noAuthAPI = map[string][]string{
 	"/api/v1/auth/wechat/qrcode":       {"POST"},
 	"/api/v1/auth/wechat/poll/*":       {"GET"},
 	"/api/v1/auth/wechat/callback":     {"GET"},
+	"/api/v1/auth/wechat/oauth-login":  {"GET"},
 }
 
 // 检查请求是否在无需认证的API列表中

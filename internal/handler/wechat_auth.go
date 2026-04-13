@@ -183,6 +183,32 @@ func (h *WeChatAuthHandler) OAuthCallback(c *gin.Context) {
 	c.Redirect(http.StatusFound, redirectURL)
 }
 
+// OAuthLogin godoc
+// @Summary      企业微信静默 OAuth 登录
+// @Description  企微自建应用内静默授权: code → userid → JWT
+// @Tags         企业微信认证
+// @Produce      json
+// @Param        code  query  string  true  "OAuth 授权码"
+// @Success      200   {object}  map[string]interface{}
+// @Failure      400   {object}  errors.AppError
+// @Failure      500   {object}  errors.AppError
+// @Router       /auth/wechat/oauth-login [get]
+func (h *WeChatAuthHandler) OAuthLogin(c *gin.Context) {
+	ctx := c.Request.Context()
+	code := c.Query("code")
+	if code == "" {
+		c.Error(errors.NewValidationError("OAuth code is required"))
+		return
+	}
+	loginResp, err := h.wechatService.LoginByCode(ctx, code)
+	if err != nil {
+		logger.Errorf(ctx, "Silent OAuth login failed: %v", err)
+		c.Error(errors.NewInternalServerError("OAuth login failed").WithDetails(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": loginResp})
+}
+
 // GetBinding godoc
 // @Summary      获取当前用户的企业微信绑定信息
 // @Description  查询当前登录用户的 OAuth 绑定状态

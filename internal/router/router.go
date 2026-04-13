@@ -590,6 +590,7 @@ func RegisterWeChatAuthRoutes(r *gin.RouterGroup, h *handler.WeChatAuthHandler) 
 		wechat.POST("/qrcode", h.GenerateQRCode)
 		wechat.GET("/poll/:ticket", h.PollStatus)
 		wechat.GET("/callback", h.OAuthCallback)
+		wechat.GET("/oauth-login", h.OAuthLogin)
 
 		// 需要认证
 		wechat.GET("/binding", h.GetBinding)
