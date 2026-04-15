@@ -61,6 +61,13 @@ func (h *ChunkHandler) effectiveCtxForKnowledge(c *gin.Context, knowledgeID stri
 			return context.WithValue(ctx, types.TenantIDContextKey, knowledge.TenantID), nil
 		}
 	}
+	// Fallback: check AgentStudio external shares
+	if h.kbShareService != nil {
+		isExtShared, _ := h.kbShareService.IsKBExternallyShared(ctx, knowledge.KnowledgeBaseID)
+		if isExtShared {
+			return context.WithValue(ctx, types.TenantIDContextKey, knowledge.TenantID), nil
+		}
+	}
 	return nil, errors.NewForbiddenError("Permission denied to access this knowledge")
 }
 
