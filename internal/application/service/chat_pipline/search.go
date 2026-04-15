@@ -404,10 +404,126 @@ func (p *PluginSearch) searchByTargets(
 
 	wg.Wait()
 
+	// Filename matching fallback: for knowledge-specific targets, check if any
+	// selected documents were missed by vector/keyword search but match by filename.
+	results = p.supplementFilenameMatches(ctx, chatManage, results)
+
 	pipelineInfo(ctx, "Search", "kb_result_summary", map[string]interface{}{
 		"total_hits": len(results),
 	})
 	return results
+}
+
+// supplementFilenameMatches checks if any knowledge documents selected by the user
+// were missed by vector/keyword search but match the query by filename.
+// For matched documents, it force-loads their chunks as a fallback.
+func (p *PluginSearch) supplementFilenameMatches(
+	ctx context.Context,
+	chatManage *types.ChatManage,
+	existingResults []*types.SearchResult,
+) []*types.SearchResult {
+	// Collect all knowledge IDs from knowledge-type targets
+	var allKnowledgeIDs []string
+	for _, t := range chatManage.SearchTargets {
+		if t.Type == types.SearchTargetTypeKnowledge {
+			allKnowledgeIDs = append(allKnowledgeIDs, t.KnowledgeIDs...)
+		}
+	}
+	if len(allKnowledgeIDs) == 0 {
+		return existingResults
+	}
+
+	// Build set of knowledge IDs already in results
+	hitKIDs := make(map[string]bool)
+	for _, r := range existingResults {
+		if r.KnowledgeID != "" {
+			hitKIDs[r.KnowledgeID] = true
+		}
+	}
+
+	// Find missed knowledge IDs
+	var missedIDs []string
+	for _, kid := range allKnowledgeIDs {
+		if !hitKIDs[kid] {
+			missedIDs = append(missedIDs, kid)
+		}
+	}
+	if len(missedIDs) == 0 {
+		return existingResults
+	}
+
+	// Fetch metadata for missed documents
+	tenantID, _ := ctx.Value(types.TenantIDContextKey).(uint64)
+	knowledges, err := p.knowledgeService.GetKnowledgeBatchWithSharedAccess(ctx, tenantID, missedIDs)
+	if err != nil {
+		logger.Warnf(ctx, "FilenameMatch: Failed to fetch knowledge batch: %v", err)
+		return existingResults
+	}
+
+	queryLower := strings.ToLower(strings.TrimSpace(chatManage.RewriteQuery))
+
+	// Check filename match
+	var filenameMatchedIDs []string
+	for _, k := range knowledges {
+		if k == nil {
+			continue
+		}
+		fileName := strings.ToLower(k.FileName)
+		if fileName != "" && strings.Contains(fileName, queryLower) {
+			filenameMatchedIDs = append(filenameMatchedIDs, k.ID)
+		}
+	}
+
+	if len(filenameMatchedIDs) == 0 {
+		return existingResults
+	}
+
+	pipelineInfo(ctx, "Search", "filename_match", map[string]interface{}{
+		"matched_ids": filenameMatchedIDs,
+		"query":       queryLower,
+	})
+
+	// Load chunks for filename-matched documents (limit 30 per doc)
+	const maxChunksPerDoc = 30
+	for _, kid := range filenameMatchedIDs {
+		chunks, err := p.chunkService.ListChunksByKnowledgeID(ctx, kid)
+		if err != nil {
+			logger.Warnf(ctx, "FilenameMatch: Failed to list chunks for %s: %v", kid, err)
+			continue
+		}
+		if len(chunks) > maxChunksPerDoc {
+			chunks = chunks[:maxChunksPerDoc]
+		}
+
+		// Find the knowledge metadata for title
+		var knowledgeTitle string
+		for _, k := range knowledges {
+			if k != nil && k.ID == kid {
+				knowledgeTitle = k.FileName
+				break
+			}
+		}
+
+		for _, chunk := range chunks {
+			existingResults = append(existingResults, &types.SearchResult{
+				ID:             chunk.ID,
+				Content:        chunk.Content,
+				KnowledgeID:    kid,
+				KnowledgeTitle: knowledgeTitle,
+				ChunkIndex:     chunk.ChunkIndex,
+				Score:          0.8, // High relevance score for filename match
+				MatchType:      types.MatchTypeFilename,
+			})
+		}
+
+		pipelineInfo(ctx, "Search", "filename_load", map[string]interface{}{
+			"knowledge_id": kid,
+			"chunks":       len(chunks),
+			"title":        knowledgeTitle,
+		})
+	}
+
+	return existingResults
 }
 
 // tryDirectChunkLoading attempts to load chunks for given knowledge IDs directly
@@ -418,8 +534,8 @@ func (p *PluginSearch) tryDirectChunkLoading(ctx context.Context, tenantID uint6
 	}
 
 	// Limit direct loading to avoid OOM or context overflow
-	// 50 chunks * ~500 chars/chunk ~= 25k chars
-	const maxTotalChunks = 50
+	// 100 chunks * ~500 chars/chunk ~= 50k chars
+	const maxTotalChunks = 100
 
 	var allChunks []*types.Chunk
 	var skippedIDs []string

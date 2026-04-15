@@ -79,6 +79,8 @@ func FormatMatchType(mt types.MatchType) string {
 		return "关系块匹配"
 	case types.MatchTypeGraph:
 		return "图谱匹配"
+	case types.MatchTypeFilename:
+		return "文件名匹配"
 	default:
 		return fmt.Sprintf("未知类型(%d)", mt)
 	}
