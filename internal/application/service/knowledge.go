@@ -2787,7 +2787,11 @@ func (s *knowledgeService) GetKnowledgeBatchWithSharedAccess(ctx context.Context
 		}
 		hasPermission, err := s.kbShareService.HasKBPermission(ctx, k.KnowledgeBaseID, userID, types.OrgRoleViewer)
 		if err != nil || !hasPermission {
-			continue
+			// Fallback: check AgentStudio external shares
+			isExtShared, _ := s.kbShareService.IsKBExternallyShared(ctx, k.KnowledgeBaseID)
+			if !isExtShared {
+				continue
+			}
 		}
 		foundSet[k.ID] = true
 		ownList = append(ownList, k)

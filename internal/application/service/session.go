@@ -978,7 +978,13 @@ func (s *sessionService) buildSearchTargets(
 				if hasAccess {
 					kbTenantMap[kbID] = kb.TenantID
 				} else {
-					kbTenantMap[kbID] = tenantID
+					// Fallback: check AgentStudio external shares
+					isExtShared, _ := s.kbShareService.IsKBExternallyShared(ctx, kbID)
+					if isExtShared {
+						kbTenantMap[kbID] = kb.TenantID
+					} else {
+						kbTenantMap[kbID] = tenantID
+					}
 				}
 			} else {
 				kbTenantMap[kbID] = tenantID

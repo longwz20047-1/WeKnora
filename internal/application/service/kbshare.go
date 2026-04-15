@@ -481,3 +481,10 @@ func (s *kbShareService) CountSharesByKnowledgeBaseIDs(ctx context.Context, kbID
 func (s *kbShareService) CountByOrganizations(ctx context.Context, orgIDs []string) (map[string]int64, error) {
 	return s.shareRepo.CountByOrganizations(ctx, orgIDs)
 }
+
+// IsKBExternallyShared checks if a KB has active public shares in the external
+// shares table (created by AgentStudio). Used as a fallback when org-based
+// permission check fails for cross-tenant KB search.
+func (s *kbShareService) IsKBExternallyShared(ctx context.Context, kbID string) (bool, error) {
+	return s.shareRepo.IsKBExternallyShared(ctx, kbID)
+}

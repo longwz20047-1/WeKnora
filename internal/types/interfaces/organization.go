@@ -108,6 +108,9 @@ type KBShareService interface {
 	CountSharesByKnowledgeBaseIDs(ctx context.Context, kbIDs []string) (map[string]int64, error)
 	// CountByOrganizations returns share counts per organization (for sidebar); excludes deleted KBs
 	CountByOrganizations(ctx context.Context, orgIDs []string) (map[string]int64, error)
+
+	// IsKBExternallyShared checks if a KB has active public/user shares in the external shares table.
+	IsKBExternallyShared(ctx context.Context, kbID string) (bool, error)
 }
 
 // KBShareRepository defines the knowledge base sharing repository interface
@@ -135,6 +138,10 @@ type KBShareRepository interface {
 	// Count shares
 	CountSharesByKnowledgeBaseID(ctx context.Context, kbID string) (int64, error)
 	CountSharesByKnowledgeBaseIDs(ctx context.Context, kbIDs []string) (map[string]int64, error)
+
+	// IsKBExternallyShared checks if a KB has active public shares in the external shares table
+	// (created by AgentStudio, separate from WeKnora's org-based sharing).
+	IsKBExternallyShared(ctx context.Context, kbID string) (bool, error)
 }
 
 // AgentShareService defines the agent sharing service interface

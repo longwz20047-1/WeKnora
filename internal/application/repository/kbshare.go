@@ -237,3 +237,18 @@ func (r *kbShareRepository) CountByOrganizations(ctx context.Context, orgIDs []s
 	}
 	return out, nil
 }
+
+// IsKBExternallyShared checks if a KB has active public shares in the external
+// shares table (created by AgentStudio, separate from WeKnora's org-based sharing).
+func (r *kbShareRepository) IsKBExternallyShared(ctx context.Context, kbID string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Table("shares").
+		Where("target_id = ? AND share_type = ? AND share_mode = ? AND status = ? AND deleted_at IS NULL",
+			kbID, "knowledge_base", "public", "active").
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
