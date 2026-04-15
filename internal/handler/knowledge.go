@@ -221,6 +221,13 @@ func (h *KnowledgeHandler) resolveKnowledgeAndValidateKBAccess(c *gin.Context, k
 			}
 		}
 	}
+	// Fallback: check AgentStudio external shares
+	if userExists && h.kbShareService != nil {
+		isExtShared, _ := h.kbShareService.IsKBExternallyShared(ctx, knowledge.KnowledgeBaseID)
+		if isExtShared {
+			return knowledge, context.WithValue(ctx, types.TenantIDContextKey, knowledge.TenantID), nil
+		}
+	}
 	return nil, ctx, errors.NewForbiddenError("Permission denied to access this knowledge")
 }
 
