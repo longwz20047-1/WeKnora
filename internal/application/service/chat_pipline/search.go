@@ -329,13 +329,21 @@ func (p *PluginSearch) searchByTargets(
 		go func(t *types.SearchTarget) {
 			defer wg.Done()
 
+			// Use target's TenantID for cross-tenant shared KB searches
+			searchCtx := ctx
+			searchTenantID := chatManage.TenantID
+			if t.TenantID != 0 && t.TenantID != chatManage.TenantID {
+				searchCtx = context.WithValue(ctx, types.TenantIDContextKey, t.TenantID)
+				searchTenantID = t.TenantID
+			}
+
 			// List of knowledge IDs to perform vector search on
 			// Default to all IDs in the target
 			searchKnowledgeIDs := t.KnowledgeIDs
 
 			// Try direct loading for specific knowledge targets
 			if t.Type == types.SearchTargetTypeKnowledge {
-				directResults, skippedIDs := p.tryDirectChunkLoading(ctx, chatManage.TenantID, t.KnowledgeIDs)
+				directResults, skippedIDs := p.tryDirectChunkLoading(searchCtx, searchTenantID, t.KnowledgeIDs)
 
 				if len(directResults) > 0 {
 					pipelineInfo(ctx, "Search", "direct_load", map[string]interface{}{
@@ -373,7 +381,7 @@ func (p *PluginSearch) searchByTargets(
 			if t.Type == types.SearchTargetTypeKnowledge {
 				params.KnowledgeIDs = searchKnowledgeIDs
 			}
-			res, err := p.knowledgeBaseService.HybridSearch(ctx, t.KnowledgeBaseID, params)
+			res, err := p.knowledgeBaseService.HybridSearch(searchCtx, t.KnowledgeBaseID, params)
 			if err != nil {
 				pipelineWarn(ctx, "Search", "kb_search_error", map[string]interface{}{
 					"kb_id":       t.KnowledgeBaseID,
